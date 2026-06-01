@@ -1,0 +1,116 @@
+{
+  "timestamp": 326,
+  "video_source": "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ",
+  "emergency_active": true,
+  "emergency_triggered_by": [
+    "siren"
+  ],
+  "scenario_type": "highway",
+  "vehicles": [
+    {
+      "id": 942,
+      "type": "truck",
+      "x_meters": 0.04,
+      "y_meters": 19.37,
+      "speed_kmh": 0.6,
+      "acceleration": 0.09,
+      "jerk": -0.42,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": 0.02,
+      "distance_to_ego": 8.89,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        301,
+        114,
+        342,
+        154
+      ]
+    },
+    {
+      "id": 927,
+      "type": "car",
+      "x_meters": -1.74,
+      "y_meters": 17.48,
+      "speed_kmh": 0.06,
+      "acceleration": -0.07,
+      "jerk": 0.14,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -0.9,
+      "distance_to_ego": 8.71,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        257,
+        137,
+        282,
+        158
+      ]
+    },
+    {
+      "id": 840,
+      "type": "truck",
+      "x_meters": 2.62,
+      "y_meters": 6.46,
+      "speed_kmh": 0.81,
+      "acceleration": -0.52,
+      "jerk": -0.56,
+      "heading_angle": 0.0,
+      "lane_id": 3,
+      "lateral_offset": -0.09,
+      "distance_to_ego": 9.81,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        416,
+        16,
+        640,
+        228
+      ]
+    },
+    {
+      "id": 950,
+      "type": "car",
+      "x_meters": -1.36,
+      "y_meters": 20.48,
+      "speed_kmh": 0.0,
+      "acceleration": 0.0,
+      "jerk": 0.0,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -0.6,
+      "distance_to_ego": 8.7,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        280,
+        140,
+        293,
+        152
+      ]
+    },
+    {
+      "id": 875,
+      "type": "bus",
+      "x_meters": 3.13,
+      "y_meters": 17.07,
+      "speed_kmh": 1.3,
+      "acceleration": -0.22,
+      "jerk": 0.51,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": 1.65,
+      "distance_to_ego": 9.13,
+      "is_emergency": false,
+      "behaviour": "yielded",
+      "bbox": [
+        381,
+        99,
+        448,
+        159
+      ]
+    }
+  ]
+}

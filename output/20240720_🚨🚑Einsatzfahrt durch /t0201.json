@@ -1,0 +1,116 @@
+{
+  "timestamp": 201,
+  "video_source": "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ",
+  "emergency_active": true,
+  "emergency_triggered_by": [
+    "siren"
+  ],
+  "scenario_type": "highway",
+  "vehicles": [
+    {
+      "id": 191,
+      "type": "car",
+      "x_meters": -1.61,
+      "y_meters": 17.92,
+      "speed_kmh": 0.28,
+      "acceleration": 0.08,
+      "jerk": 0.02,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -0.81,
+      "distance_to_ego": 8.7,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        263,
+        138,
+        286,
+        157
+      ]
+    },
+    {
+      "id": 606,
+      "type": "car",
+      "x_meters": -1.85,
+      "y_meters": 15.25,
+      "speed_kmh": 0.91,
+      "acceleration": 0.11,
+      "jerk": 0.48,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -1.09,
+      "distance_to_ego": 8.68,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        239,
+        136,
+        277,
+        164
+      ]
+    },
+    {
+      "id": 198,
+      "type": "car",
+      "x_meters": -2.12,
+      "y_meters": 8.53,
+      "speed_kmh": 1.26,
+      "acceleration": 0.44,
+      "jerk": 0.59,
+      "heading_angle": 0.0,
+      "lane_id": 1,
+      "lateral_offset": 1.52,
+      "distance_to_ego": 8.69,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        142,
+        124,
+        244,
+        201
+      ]
+    },
+    {
+      "id": 510,
+      "type": "truck",
+      "x_meters": 2.21,
+      "y_meters": 6.29,
+      "speed_kmh": 0.63,
+      "acceleration": -0.13,
+      "jerk": 0.13,
+      "heading_angle": 0.0,
+      "lane_id": 3,
+      "lateral_offset": -0.59,
+      "distance_to_ego": 9.76,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        360,
+        0,
+        640,
+        231
+      ]
+    },
+    {
+      "id": 400,
+      "type": "truck",
+      "x_meters": 0.64,
+      "y_meters": 14.34,
+      "speed_kmh": 0.41,
+      "acceleration": -0.21,
+      "jerk": -0.65,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": 0.4,
+      "distance_to_ego": 9.01,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        316,
+        90,
+        371,
+        167
+      ]
+    }
+  ]
+}
