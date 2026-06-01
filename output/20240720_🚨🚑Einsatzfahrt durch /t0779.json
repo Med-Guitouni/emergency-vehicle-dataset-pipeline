@@ -1,0 +1,29 @@
+{
+  "timestamp": 779,
+  "video_source": "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ",
+  "emergency_active": true,
+  "scenario_type": "highway",
+  "vehicles": [
+    {
+      "id": 1373,
+      "type": "truck",
+      "x_meters": 2.15,
+      "y_meters": 6.96,
+      "speed_kmh": 0.81,
+      "acceleration": -1.43,
+      "jerk": -2.63,
+      "heading_angle": 0.0,
+      "lane_id": 3,
+      "lateral_offset": -0.97,
+      "distance_to_ego": 9.7,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        349,
+        2,
+        608,
+        220
+      ]
+    }
+  ]
+}

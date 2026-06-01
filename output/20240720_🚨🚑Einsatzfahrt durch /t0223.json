@@ -1,0 +1,197 @@
+{
+  "timestamp": 223,
+  "video_source": "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ",
+  "emergency_active": true,
+  "scenario_type": "highway",
+  "vehicles": [
+    {
+      "id": 596,
+      "type": "car",
+      "x_meters": -1.36,
+      "y_meters": 19.91,
+      "speed_kmh": 0.19,
+      "acceleration": -0.01,
+      "jerk": -0.07,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -0.62,
+      "distance_to_ego": 8.71,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        277,
+        139,
+        294,
+        153
+      ]
+    },
+    {
+      "id": 343,
+      "type": "car",
+      "x_meters": -2.89,
+      "y_meters": 6.34,
+      "speed_kmh": 1.94,
+      "acceleration": -0.55,
+      "jerk": -1.62,
+      "heading_angle": 0.0,
+      "lane_id": 1,
+      "lateral_offset": -0.35,
+      "distance_to_ego": 9.49,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        0,
+        77,
+        175,
+        230
+      ]
+    },
+    {
+      "id": 659,
+      "type": "car",
+      "x_meters": -1.85,
+      "y_meters": 16.29,
+      "speed_kmh": 0.14,
+      "acceleration": -0.09,
+      "jerk": -0.12,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -1.02,
+      "distance_to_ego": 8.67,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        255,
+        140,
+        269,
+        161
+      ]
+    },
+    {
+      "id": 661,
+      "type": "truck",
+      "x_meters": 0.23,
+      "y_meters": 17.07,
+      "speed_kmh": 0.28,
+      "acceleration": 0.19,
+      "jerk": 0.24,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": 0.12,
+      "distance_to_ego": 8.97,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        302,
+        101,
+        353,
+        159
+      ]
+    },
+    {
+      "id": 695,
+      "type": "truck",
+      "x_meters": 2.51,
+      "y_meters": 6.4,
+      "speed_kmh": 0.0,
+      "acceleration": 0.0,
+      "jerk": 0.0,
+      "heading_angle": 0.0,
+      "lane_id": 3,
+      "lateral_offset": -0.22,
+      "distance_to_ego": 9.9,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        403,
+        0,
+        640,
+        229
+      ]
+    },
+    {
+      "id": 624,
+      "type": "car",
+      "x_meters": -2.2,
+      "y_meters": 14.05,
+      "speed_kmh": 0.58,
+      "acceleration": 0.07,
+      "jerk": 0.02,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -1.41,
+      "distance_to_ego": 8.69,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        223,
+        136,
+        258,
+        168
+      ]
+    },
+    {
+      "id": 617,
+      "type": "car",
+      "x_meters": -1.75,
+      "y_meters": 17.92,
+      "speed_kmh": 0.38,
+      "acceleration": 0.24,
+      "jerk": 0.28,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -0.88,
+      "distance_to_ego": 8.71,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        261,
+        138,
+        279,
+        157
+      ]
+    },
+    {
+      "id": 400,
+      "type": "truck",
+      "x_meters": 2.91,
+      "y_meters": 18.86,
+      "speed_kmh": 2.03,
+      "acceleration": 1.58,
+      "jerk": 1.47,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": 1.39,
+      "distance_to_ego": 9.14,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        373,
+        97,
+        425,
+        155
+      ]
+    },
+    {
+      "id": 198,
+      "type": "car",
+      "x_meters": -2.54,
+      "y_meters": 10.24,
+      "speed_kmh": 0.97,
+      "acceleration": -0.24,
+      "jerk": -0.09,
+      "heading_angle": 0.0,
+      "lane_id": 1,
+      "lateral_offset": 1.52,
+      "distance_to_ego": 8.8,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        155,
+        126,
+        231,
+        187
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+videos/
+*.mp4
+*.wav
+*.pt
+__pycache__/
+*.pyc
+.DS_Store
+Ultra-Fast-Lane-Detection-v2/
+models/*.onnx
+models/*.pth
+models/*.pt
+test_*.jpg
+yolop_*.jpg
+test_frame_*.jpg
+test_lanes*.jpg

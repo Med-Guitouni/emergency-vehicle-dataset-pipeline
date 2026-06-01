@@ -1,0 +1,113 @@
+{
+  "timestamp": 814,
+  "video_source": "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ",
+  "emergency_active": true,
+  "scenario_type": "highway",
+  "vehicles": [
+    {
+      "id": 1850,
+      "type": "truck",
+      "x_meters": 1.02,
+      "y_meters": 10.24,
+      "speed_kmh": 0.96,
+      "acceleration": -0.15,
+      "jerk": -0.38,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": 0.9,
+      "distance_to_ego": 9.53,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        291,
+        13,
+        451,
+        187
+      ]
+    },
+    {
+      "id": 1903,
+      "type": "truck",
+      "x_meters": -2.13,
+      "y_meters": 11.38,
+      "speed_kmh": 0.45,
+      "acceleration": -0.2,
+      "jerk": -0.15,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -1.69,
+      "distance_to_ego": 8.76,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        195,
+        122,
+        253,
+        180
+      ]
+    },
+    {
+      "id": 1906,
+      "type": "car",
+      "x_meters": -2.91,
+      "y_meters": 6.34,
+      "speed_kmh": 1.91,
+      "acceleration": -1.57,
+      "jerk": -5.05,
+      "heading_angle": 0.0,
+      "lane_id": 1,
+      "lateral_offset": -0.38,
+      "distance_to_ego": 9.22,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        0,
+        113,
+        170,
+        230
+      ]
+    },
+    {
+      "id": 1910,
+      "type": "car",
+      "x_meters": -1.78,
+      "y_meters": 14.93,
+      "speed_kmh": 0.0,
+      "acceleration": 0.0,
+      "jerk": 0.0,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -1.07,
+      "distance_to_ego": 8.66,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        248,
+        137,
+        270,
+        165
+      ]
+    },
+    {
+      "id": 1911,
+      "type": "truck",
+      "x_meters": -2.05,
+      "y_meters": 17.48,
+      "speed_kmh": 0.0,
+      "acceleration": 0.0,
+      "jerk": 0.0,
+      "heading_angle": 0.0,
+      "lane_id": 2,
+      "lateral_offset": -1.05,
+      "distance_to_ego": 8.83,
+      "is_emergency": false,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        251,
+        124,
+        270,
+        158
+      ]
+    }
+  ]
+}
