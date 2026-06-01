@@ -53,7 +53,7 @@ class HeuristicAnnotator:
 
         # Rule 1: sudden fast lateral movement
         lateral_change = abs(curr_lateral - prev_lat)
-        if lateral_change >= self.YIELD_SUDDEN:
+        if lateral_change >= self.YIELD_LATERAL_SUDDEN:
             return "yielded"
 
         # Rule 2: car clearly angled away
