@@ -50,13 +50,24 @@ for item in first_minute:
             'lateral_offset': lateral_offset,
             'distance_to_ego': distance_to_ego,
             'speed_kmh': speed,
-            'acceleration': acceleration
+            'acceleration': acceleration,
+            'heading_angle': h.estimate_heading(tid, center)
         })
 
-    emergency_active, triggered_by = ed.is_emergency_active(timestamp, frame, vehicles, prev_vehicles)
-    prev_vehicles = vehicles
+        emergency_active, triggered_by = ed.is_emergency_active(timestamp, frame, vehicles, prev_vehicles)
+        prev_vehicles = vehicles
 
-    if emergency_active:
-        print(f't={timestamp}s EMERGENCY ON - triggered by: {triggered_by}')
-    else:
-        print(f't={timestamp}s normal')
+        # annotate each vehicle
+        for v in vehicles:
+            v['behaviour'] = a.annotate(v, emergency_active)
+
+        # print summary
+        yielding = [v for v in vehicles if v['behaviour'] == 'yielded']
+        braking = [v for v in vehicles if v['behaviour'] == 'braked_abruptly']
+        failed = [v for v in vehicles if v['behaviour'] == 'failed_to_yield']
+
+        if emergency_active:
+            print(
+                f't={timestamp}s EMERGENCY ON - {len(vehicles)} vehicles - yielded={len(yielding)} braked={len(braking)} failed={len(failed)}')
+        else:
+            print(f't={timestamp}s normal - {len(vehicles)} vehicles')

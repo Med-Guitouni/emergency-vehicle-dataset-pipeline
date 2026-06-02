@@ -1,24 +1,49 @@
 class HeuristicAnnotator:
+    """
+    Labels each vehicle's behaviour per frame based on its motion relative to the ambulance.
+    Only applies labels when the emergency is active - all other frames are labelled normal.
 
-    YIELD_LATERAL_SUDDEN = 0.5        # meters lateral change in 1 second - Rule 1
-    YIELD_HEADING_THRESHOLD = 15.0    # degrees heading angle - Rule 2
-    YIELD_CUMULATIVE = 0.8            # meters cumulative lateral over 3s - Rule 3
-    CUMULATIVE_WINDOW = 3             # seconds to look back
-    ABRUPT_BRAKE_THRESHOLD = -2.0     # m/s2 acceleration threshold
-    YIELD_SPEED_DROP = 10.0           # km/h speed drop
-    PROXIMITY_THRESHOLD = 50.0        # meters - how close ambulance needs to be
-    FAILED_YIELD_PROXIMITY = 20.0     # meters - very close and still not yielded
+    Labels assigned: normal, braked_abruptly, yielded, failed_to_yield
+
+    How the rules work:
+    Rules 1 to 4 were designed based on our own analysis of the dashcam footage.
+    Rule 5 was added after reading the lane change detection review by Qiu et al. (2025)
+    from UHasselt Transportation Research Institute. That paper showed that tracking the
+    change in heading angle of a vehicle over time is a reliable signal for detecting lateral
+    manoeuvres from dashcam footage, even when lane markings are not visible. Before reading
+    that paper, I only tracked lateral offset in meters which was noisy and hard to threshold
+    correctly. The heading angle approach is more robust because it captures the vehicle's
+    intent to move sideways regardless of exact pixel position.
+
+    Known limitation:
+    Rules 1 to 4 depend on lateral_offset which is estimated from pixel position divided
+    by assumed lane width - this is approximate and introduces noise especially when trucks
+    occlude lane markings and shift our reference point. Rule 5 partially compensates for
+    this by using heading angle which is independent of lane marking assumptions.
+    The failed_to_yield label is the weakest rule - it simply flags any vehicle within
+    20 meters that did not trigger any yielding rule, which will produce false positives
+    for vehicles legitimately in front of the ambulance that cannot yield.
+    """
+
+    YIELD_LATERAL_SUDDEN = 0.5     # meters lateral change in 1 second - Rule 1
+    YIELD_HEADING_THRESHOLD = 15.0  # degrees heading angle - Rules 2 and 5
+    YIELD_CUMULATIVE = 0.8          # meters cumulative lateral over 3 seconds - Rule 3
+    CUMULATIVE_WINDOW = 3           # seconds to look back for rules 3 and 5
+    ABRUPT_BRAKE_THRESHOLD = -2.0   # m/s2 acceleration threshold
+    YIELD_SPEED_DROP = 10.0         # km/h speed drop counts as yielding
+    PROXIMITY_THRESHOLD = 50.0      # meters - ambulance must be this close to apply rules
+    FAILED_YIELD_PROXIMITY = 20.0   # meters - very close and still not yielding
 
     def __init__(self):
         self.prev_lateral = {}
         self.prev_speed = {}
         self.lateral_history = {}
+        self.heading_history = {}  # added for Rule 5 after reading Qiu et al. 2025
 
     def annotate(self, vehicle, emergency_active):
         """
-        Assigns behaviour label to each vehicle per timestep.
-        Only meaningful when emergency is active.
-        Labels: normal, braked_abruptly, yielded, failed_to_yield
+        Assigns a behaviour label to one vehicle at one timestep.
+        Returns normal if emergency is not active or ambulance is too far.
         """
         if not emergency_active:
             return "normal"
@@ -30,37 +55,47 @@ class HeuristicAnnotator:
         acceleration = vehicle.get("acceleration", 0.0)
         distance = vehicle.get("distance_to_ego", 999.0)
 
-        # update histories
-        prev_lat = self.prev_lateral.get(tid, curr_lateral)
-        prev_spd = self.prev_speed.get(tid, curr_speed)
-
+        # update lateral history for Rule 3
         if tid not in self.lateral_history:
             self.lateral_history[tid] = []
         self.lateral_history[tid].append(curr_lateral)
         if len(self.lateral_history[tid]) > self.CUMULATIVE_WINDOW:
             self.lateral_history[tid].pop(0)
 
+        # update heading history for Rule 5
+        if tid not in self.heading_history:
+            self.heading_history[tid] = []
+        self.heading_history[tid].append(curr_heading)
+        if len(self.heading_history[tid]) > self.CUMULATIVE_WINDOW:
+            self.heading_history[tid].pop(0)
+
+        # store previous values
+        prev_lat = self.prev_lateral.get(tid, curr_lateral)
+        prev_spd = self.prev_speed.get(tid, curr_speed)
         self.prev_lateral[tid] = curr_lateral
         self.prev_speed[tid] = curr_speed
 
-        # ambulance not close enough yet
+        # ambulance not close enough yet - no interaction
         if distance > self.PROXIMITY_THRESHOLD:
             return "normal"
 
-        # Rule: abrupt braking takes priority
+        # abrupt braking takes priority over everything
         if acceleration <= self.ABRUPT_BRAKE_THRESHOLD:
             return "braked_abruptly"
 
-        # Rule 1: sudden fast lateral movement
+        # Rule 1 - sudden fast lateral movement in one second
+        # catches fast decisive pullovers
         lateral_change = abs(curr_lateral - prev_lat)
         if lateral_change >= self.YIELD_LATERAL_SUDDEN:
             return "yielded"
 
-        # Rule 2: car clearly angled away
+        # Rule 2 - vehicle clearly angled away from road direction
+        # catches diagonal yielding where lateral movement alone is small
         if curr_heading >= self.YIELD_HEADING_THRESHOLD:
             return "yielded"
 
-        # Rule 3: cumulative lateral displacement over 3 seconds
+        # Rule 3 - cumulative lateral displacement over 3 seconds in same direction
+        # catches slow gradual yielding missed second by second
         if len(self.lateral_history[tid]) >= self.CUMULATIVE_WINDOW:
             history = self.lateral_history[tid]
             total = abs(history[-1] - history[0])
@@ -72,12 +107,25 @@ class HeuristicAnnotator:
             if total >= self.YIELD_CUMULATIVE and consistent:
                 return "yielded"
 
-        # speed drop indicates yielding
+        # Rule 4 - speed drop indicates yielding response to ambulance
         speed_drop = prev_spd - curr_speed
         if speed_drop >= self.YIELD_SPEED_DROP:
             return "yielded"
 
-        # very close and clearly not yielding
+        # Rule 5 - heading angle increasing consistently over 3 frames
+        # added after Qiu et al. 2025 showed heading angle change is a robust
+        # signal for lateral manoeuvres even when lane markings are not visible
+        # before this rule we only used raw lateral offset which was noisy
+        if len(self.heading_history[tid]) >= self.CUMULATIVE_WINDOW:
+            angles = self.heading_history[tid]
+            increasing = all(
+                angles[i] < angles[i+1]
+                for i in range(len(angles)-1)
+            )
+            if increasing and curr_heading >= self.YIELD_HEADING_THRESHOLD:
+                return "yielded"
+
+        # vehicle is very close and none of the yielding rules triggered
         if distance <= self.FAILED_YIELD_PROXIMITY:
             return "failed_to_yield"
 
