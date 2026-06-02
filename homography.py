@@ -8,18 +8,65 @@ class HomographyEstimator:
     using camera geometry and lane width assumptions. Also computes speed,
     acceleration, jerk, heading and lane position per vehicle per frame.
 
-    Current limitations and what still needs tuning:
-    - Speed is relative to the ambulance, not absolute. Ego motion compensation
-      is not yet implemented meaning all speeds are underestimated.
-    - Camera intrinsics (focal length, mount height) are estimated not measured.
-      For production quality, these should be calibrated from the actual dashcam specs.
-    - Lane detection assumes exactly 3 equal lanes always visible which is not true
-      at intersections, on-ramps or when the ambulance changes lanes.
-    - Lateral offset is measured from an estimated lane center not from actual
-      road markings. A proper lane detection model would improve this significantly.
-    - Distance to ego assumes the ambulance is at bottom center of frame which
-      is a rough approximation depending on dashcam mount position.
-    - All calculations assume a flat ground plane which fails on hills or ramps.
+    ---
+
+    CURRENT LIMITATIONS
+
+    Speed is relative to the ambulance not absolute. When the ambulance moves
+    at 100 km/h and a car ahead moves at 95 km/h, the car appears to move at
+    only 5 km/h in our output. This makes speed and acceleration values
+    scientifically unreliable for the distributional analysis.
+
+    Camera intrinsics are estimated not measured. Focal length is set to
+    frame_width times 0.8 and mount height is fixed at 1.4 meters. These are
+    reasonable defaults for a dashcam but should be calibrated from the actual
+    device specs for production quality results.
+
+    Lane detection assumes exactly 3 equal lanes always visible across the frame.
+    This breaks at intersections, on-ramps, and when the ambulance changes lanes.
+    attempted to fix this using UFLD v2 and YOLOP but both failed because
+    vehicles on the shoulder physically cover the lane markings at exactly the
+    moments we care about most. This is left as a known limitation.
+
+    Lateral offset is measured from an estimated lane center not from actual
+    road markings. A proper lane detection model with static boundary estimation
+    would improve this significantly.
+
+    Distance to ego assumes the ambulance is at the bottom center of the frame.
+    This is a rough approximation depending on dashcam mount position.
+
+    All calculations assume a flat ground plane which fails on hills and ramps.
+
+    ---
+
+    OPTION 2 - EGO MOTION COMPENSATION - IN PROGRESS - NOT YET IMPLEMENTED
+
+    To fix the speed problem two steps are needed:
+
+    Step 1 - Add Depth Anything V2
+    Run Depth Anything V2 on each frame to get a per-pixel depth map that tells
+    us how far each vehicle is from the camera in real meters. Without this,
+    ego motion compensation cannot be done accurately because the math requires
+    knowing the actual distance to each object.
+    Model: https://github.com/DepthAnything/Depth-Anything-V2
+    Scientific basis: Cristian suggested depth estimation models.
+    The EMAP paper (Mahdian et al. 2024) confirms depth maps are required for
+    proper ego motion decoupling in the Kalman Filter.
+
+    Step 2 - Integrate EMAP with ByteTrack
+    EMAP (Ego-Motion Aware Target Prediction) reformulates the Kalman Filter
+    inside ByteTrack to decouple camera rotation and translation from object motion.
+    The estimate_ego_motion method in this class already computes camera motion
+    using optical flow - this output can be fed directly into EMAP as odometry.
+    On the KITTI dataset EMAP reduced identity switches in ByteTrack by 33 percent
+    and improved HOTA tracking accuracy by more than 5 percent.
+    Open source code: https://github.com/noyzzz/EMAP
+
+
+    Files to modify when implementing:
+    - main.py: add Depth Anything V2 inference per frame before tracking
+    - tracker.py: replace standard ByteTrack with ByteTrack + EMAP
+    - homography.py: pass depth map and camera odometry to EMAP module
     """
 
     # standard German highway lane width used as scale reference
