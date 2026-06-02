@@ -152,8 +152,7 @@ in front of the ambulance that cannot move will be mislabelled.
 
 Vehicle behaviour is measured as data only and is never used to trigger 
 emergency_active status. Using behaviour as a trigger would create a circular 
-dependency since behaviour differences between emergency and normal scenarios 
-are the core subject of analysis in this thesis.
+dependency.
 
 ---
 
