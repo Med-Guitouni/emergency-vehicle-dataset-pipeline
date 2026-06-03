@@ -13,3 +13,8 @@ test_*.jpg
 yolop_*.jpg
 test_frame_*.jpg
 test_lanes*.jpg
+Depth-Anything-V2/
+EMAP/
+models/
+*.pth
+*.wav
