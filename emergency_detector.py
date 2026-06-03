@@ -4,14 +4,12 @@ import subprocess
 import os
 import cv2
 
+
 class EmergencyDetector:
 
     SIREN_FREQ_LOW = 500
     SIREN_FREQ_HIGH = 2000
     SIREN_ENERGY_THRESHOLD = 0.35
-
-    MIN_VEHICLES_MOVING_LATERALLY = 2
-    LATERAL_MOVEMENT_THRESHOLD = 0.3
 
     BLUE_LOW = np.array([100, 150, 100])
     BLUE_HIGH = np.array([130, 255, 255])
@@ -24,6 +22,10 @@ class EmergencyDetector:
         self.sr = None
         self.daytime = None
         self._extract_audio()
+
+        # once emergency is confirmed this stays True for the rest of the video
+        # so we stop checking audio every single frame
+        self.emergency_latched = False
 
     def _extract_audio(self):
         print("Extracting audio...")
@@ -38,8 +40,8 @@ class EmergencyDetector:
         else:
             print("Audio extraction failed")
 
-    # Samples 10 frames, extracts top 20% of each frame as sky region
-    # converts to grayscale and measures average brightness using NumPy
+    # samples 10 frames, extracts top 20% of each frame as sky region
+    # converts to grayscale and measures average brightness
     # each frame votes day if sky > 120 and scene > 80 on 0-255 scale
     # majority vote across all frames determines day or night
     def detect_daytime(self, frames_sample):
@@ -55,8 +57,8 @@ class EmergencyDetector:
         print(f"Day/night: {day_votes}/{len(frames_sample)} day votes -> {'daytime' if is_day else 'nighttime'}")
         return is_day
 
-    # extracts  audio segment
-    # if siren frequencies dominate more than 35% of total energy - siren detected
+    # extracts the 1-second audio segment at this timestamp
+    # checks if siren frequencies (500-2000 Hz) dominate more than 35% of total energy
     def detect_siren(self, timestamp):
         if self.audio is None:
             return False
@@ -75,81 +77,29 @@ class EmergencyDetector:
         ratio = siren_energy / total_energy
         return ratio > self.SIREN_ENERGY_THRESHOLD
 
-    # counts matching blue pixels in the frame
-    # only used for nighttime videos - disabled for daytime to avoid sky false positives
+    # counts matching blue pixels in the frame using HSV colour range
+    # only runs at night - disabled for daytime because the sky triggers
+    # too many false positives in the same blue HSV range
     def detect_blue_light(self, frame):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.BLUE_LOW, self.BLUE_HIGH)
         blue_pixels = np.sum(mask > 0)
         return blue_pixels > self.BLUE_PIXEL_THRESHOLD
 
-    def detect_vehicle_behaviour(self, current_vehicles, prev_vehicles):
-        """"
-        Detects yielding behaviour per vehicle.
-        NOTE: This method is NOT used for emergency_active triggering
-
-        Rule 1: lateral change > 0.5m in one second (sudden fast pullover)
-        Rule 2: heading angle > 15 degrees (car clearly angled away)
-        Rule 3: cumulative lateral movement > 0.8m in same direction over 3s
-        Rule 4: in dev
-        """""
-        if not prev_vehicles:
-            return False
-
-        prev_dict = {v["track_id"]: v for v in prev_vehicles}
-        yielding_vehicles = 0
-
-        for v in current_vehicles:
-            tid = v["track_id"]
-            curr_lateral = v.get("lateral_offset", 0.0)
-            curr_heading = abs(v.get("heading_angle", 0.0))
-
-            # update lateral history
-            if tid not in self.lateral_history:
-                self.lateral_history[tid] = []
-            self.lateral_history[tid].append(curr_lateral)
-            if len(self.lateral_history[tid]) > self.CUMULATIVE_WINDOW:
-                self.lateral_history[tid].pop(0)
-
-            yielding = False
-
-            # Rule 1 - sudden fast lateral movement > 0.5m in one second
-            if tid in prev_dict:
-                prev_lateral = prev_dict[tid].get("lateral_offset", 0.0)
-                if abs(curr_lateral - prev_lateral) >= 0.5:
-                    yielding = True
-
-            # Rule 2 - car clearly angled away, heading > 15 degrees
-            if curr_heading >= self.HEADING_ANGLE_THRESHOLD:
-                yielding = True
-
-            # Rule 3 - cumulative lateral displacement > 0.8m over 3 seconds
-            # must be consistent direction (not oscillating)
-            if len(self.lateral_history[tid]) >= self.CUMULATIVE_WINDOW:
-                history = self.lateral_history[tid]
-                total_displacement = abs(history[-1] - history[0])
-                direction = history[-1] - history[0]
-                consistent = all(
-                    (history[i + 1] - history[i]) * direction >= 0
-                    for i in range(len(history) - 1)
-                )
-                if total_displacement >= self.CUMULATIVE_LATERAL_THRESHOLD and consistent:
-                    yielding = True
-
-            if yielding:
-                yielding_vehicles += 1
-
-        return yielding_vehicles >= self.MIN_VEHICLES_MOVING_LATERALLY
-
-    """"
-    The emergency trigger must be independent of the vehicles reactions/behaviour
-    we are comparing behaviour WITH vs WITHOUT emergency vehicle. If we use behaviour
-    to define when the emergency is active,analysis becomes circular
-    measuring what is already assumed.
-    """
-
+    # NOTE: vehicle behaviour is never used to trigger emergency_active
+    # we are studying how behaviour differs between emergency and normal scenarios
+    # if we used behaviour to define when the emergency is active, the thing
+    # we are measuring would also be the thing we are detecting - circular logic
     def is_emergency_active(self, timestamp, frame, current_vehicles, prev_vehicles):
+        # if emergency was already confirmed earlier in this video, keep it on
+        # an ambulance does not turn its siren off and on mid-run
+        # and the FFT check on every frame wastes time once we already know
+        if self.emergency_latched:
+            return True, ["siren"]
+
         siren = self.detect_siren(timestamp)
+
+        # blue light only checked at night - see detect_blue_light comment above
         blue_light = self.detect_blue_light(frame) if self.daytime is False else False
 
         triggered_by = []
@@ -157,5 +107,9 @@ class EmergencyDetector:
             triggered_by.append("siren")
         if blue_light:
             triggered_by.append("blue_light")
+
+        # latch on first confirmed trigger so we never run FFT again
+        if triggered_by:
+            self.emergency_latched = True
 
         return len(triggered_by) > 0, triggered_by
