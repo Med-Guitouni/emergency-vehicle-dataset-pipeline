@@ -115,7 +115,6 @@ output/
   "lane_id": 1,
   "lateral_offset": 0.3,
   "distance_to_ego": 12.4,
-  "is_emergency": false,
   "behaviour": "yielded",
   "bbox": [259, 140, 282, 160]
 }
