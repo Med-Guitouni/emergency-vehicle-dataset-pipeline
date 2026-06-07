@@ -117,35 +117,32 @@ def process_video(video_path):
             # touches the road - best point for ground-plane geometry
             bottom_center = [(bbox[0] + bbox[2]) // 2, bbox[3]]
 
-            # position in metres - now uses depth map when available
+            # position in metres via ground-plane pinhole projection.
+            # x_m = lateral (+ = right), y_m = forward distance ahead.
+            # This is the single source of truth - everything below derives
+            # from it, so all metrics share one coordinate system.
             x_m, y_m = h.get_bev_position(
-                bottom_center, frame_width, frame_height, bbox=bbox
+                bottom_center, frame_width, frame_height
             )
 
-            # speed - now ego-compensated when EMAP available
-            # this is the single combined speed (overall motion magnitude)
-            speed = h.estimate_speed(
-                tid, center, frame_width, frame_height, bbox=bbox
-            )
-
-            # NEW: split velocity into forward + lateral components in m/s.
-            # MUST be called AFTER estimate_speed() because estimate_speed()
-            # updates the stored previous position; estimate_split_velocity()
-            # reads it but does not update it, so both must see the same prev.
-            # forward_speed: + = moving away from ego, - = moving toward ego
-            # lateral_speed: + = moving right, - = moving left
-            forward_speed, lateral_speed = h.estimate_split_velocity(
-                tid, center, frame_width, frame_height, bbox=bbox
+            # relative velocity, derived from how the metric position moved.
+            # forward_speed / lateral_speed are in m/s, speed is km/h magnitude.
+            # forward: + = moving away from ego, - = moving toward ego
+            # lateral: + = moving right, - = moving left
+            # NOTE: this is RELATIVE to the ambulance, not absolute ground speed
+            # (absolute speed needs ego odometry we do not have - see homography).
+            # Call exactly once per vehicle per frame: it updates the stored
+            # previous position internally.
+            forward_speed, lateral_speed, speed = h.estimate_relative_velocity(
+                tid, x_m, y_m
             )
 
             acceleration = h.estimate_acceleration(tid, speed)
             jerk         = h.estimate_jerk(tid, acceleration)
             heading      = h.estimate_heading(tid, center)
 
-            # distance - now uses depth when available, bug fix applied
-            distance_to_ego = h.estimate_distance_to_ego(
-                center, frame_width, frame_height, bbox=bbox
-            )
+            # distance to ego = straight-line distance from origin to (x_m, y_m)
+            distance_to_ego = h.estimate_distance_to_ego(x_m, y_m)
 
             lane_id        = h.estimate_lane_id(center[0], frame_width)
             lateral_offset = h.estimate_lateral_offset(center[0], frame_width)

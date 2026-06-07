@@ -187,378 +187,283 @@ class DepthEstimator:
 
 class HomographyEstimator:
     """
-    Converts pixel positions of detected vehicles into real-world coordinates
-    (metres), and computes speed, acceleration, jerk, heading, lane ID,
-    lateral offset, and distance to the ambulance per vehicle per frame.
+    Turns each detected vehicle's pixel position into real-world metres, then
+    derives relative velocity, distance to the ambulance, heading and lane info
+    from those metric positions.
 
-    What changed from the old version:
-    The old version used a single scale factor (3 lanes = 11.25m across the
-    whole frame width) for everything. This caused severe underestimation
-    because objects far away subtend few pixels but cover large distances.
+    =========================================================================
+    HOW POSITION IS COMPUTED  (this is the part that was fixed)
+    =========================================================================
+    OLD (broken) approach:
+      - A single scale "3 lanes = 11.25m across the whole frame width" was used
+        for everything, OR a depth map from Depth Anything V2 was scaled to
+        metres using a near-road anchor.
+      - Both failed. The lane-width scale ignores that far objects cover more
+        ground per pixel than near ones. The depth anchor assumed the bottom of
+        the frame was road 1.4m ahead - but preprocessor.py crops away the
+        bottom 15% of the image, so the bottom row is actually road ~20-40m
+        ahead. Anchoring a far point to 1.4m squashed every distance into a
+        tiny 0.1-2.5m range. Depth Anything also outputs RELATIVE inverse depth
+        (unitless, nonlinear), which no single multiply can convert to metres.
 
-    The new version uses Depth Anything V2 depth maps + EMAP ego-motion
-    compensation to fix both distance and speed. When the depth model is not
-    available (model file missing, package not installed) the code falls back
-    to the old lane-width method automatically so nothing breaks.
+    NEW (correct) approach - ground-plane pinhole projection:
+      A vehicle's tyres touch the road. The road is a flat plane a known height
+      (camera_height) below the camera. Basic camera geometry then gives the
+      forward distance directly, with NO depth model needed:
 
-    EMAP integration:
-    EMAP (Ego-Motion Aware Target Prediction, Mahdian et al. 2024) modifies
-    the Kalman Filter inside ByteTrack to subtract the camera's own motion
-    before predicting where each vehicle will be next frame. This stops
-    vehicles appearing to move when actually the ambulance is moving.
-    We feed EMAP the camera odometry matrix H that estimate_ego_motion()
-    already computes from optical flow.
-    EMAP lives in tracker.py. This class computes the odometry and depth map
-    and passes them to the tracker each frame via process_frame().
+          forward_distance = camera_height * focal_length / pixels_below_horizon
+
+      "pixels_below_horizon" is how far the bottom-centre of the bounding box
+      sits below the horizon line in the image. The further below the horizon a
+      vehicle's wheels are, the closer it is. This is metric by construction -
+      the only unknowns are focal_length and camera_height, which are estimated
+      and scale all distances by one constant factor we can calibrate later.
+
+    WHERE THE HORIZON IS  (the key detail)
+      The horizon is where the road meets the sky - the vanishing line. For a
+      dashcam looking roughly straight ahead, the horizon sits at the vertical
+      centre of the ORIGINAL image. But preprocessor.py crops the frame to
+      rows [0.20*H : 0.85*H]. So in the CROPPED frame the horizon is no longer
+      at the centre. Its position in the cropped frame is:
+
+          (0.5 - 0.20) / (0.85 - 0.20) = 0.30 / 0.65 = 0.46
+
+      i.e. about 46% of the way down the cropped frame. That is the default
+      value of self.horizon_ratio below. It is exposed as a tunable parameter
+      because: (a) the dashcam may be tilted slightly down (which moves the
+      horizon up), and (b) if the crop fractions in preprocessor.py change,
+      this ratio must change with them.
+
+    =========================================================================
+    HONEST LIMITATION - speed is RELATIVE, not absolute
+    =========================================================================
+    Velocity here is the change in a vehicle's position RELATIVE TO THE
+    AMBULANCE per second. If the ambulance and a car both travel at 100 km/h,
+    the car's relative velocity is ~0 - it is not moving relative to us.
+    Getting ABSOLUTE speed would require knowing the ambulance's own metric
+    speed each frame (ego odometry), which needs calibrated depth or GPS that
+    we do not have. EMAP (in tracker.py) improves TRACKING robustness but does
+    not give us reliable metric ego-speed from a single uncalibrated camera.
+    Relative velocity is still exactly the signal we need for yielding: a car
+    pulling aside has a clear sideways (lateral) relative velocity regardless
+    of how fast anyone is going forward.
+
+    =========================================================================
+    DEPTH IS STILL COMPUTED - but only for EMAP
+    =========================================================================
+    process_frame() still runs Depth Anything V2 and returns the depth map.
+    That map is no longer used for distance here; it is passed to the EMAP
+    tracker as a per-object control signal to help association. Position and
+    velocity in THIS class are pure geometry.
     """
 
     LANE_WIDTH_METERS = 3.75  # standard German Autobahn lane width
 
-    def __init__(self, camera_height=1.4, focal_length_factor=0.8):
-        """
-        camera_height: how high the dashcam is above the road in meters.
-                       1.4m is a reasonable estimate for a windshield-mounted
-                       dashcam. Replace with measured value for better accuracy.
+    # vehicles farther than this (metres) are clamped - beyond ~150m a 1px
+    # change near the horizon swings distance by tens of metres, so the value
+    # is unreliable. We keep the detection but cap the reported distance.
+    MAX_FORWARD_METERS = 250.0
 
-        focal_length_factor: focal_length = frame_width * this factor.
-                             0.8 is a rough estimate. Proper calibration
-                             from the dashcam spec sheet would improve all
-                             distance and speed numbers significantly.
+    def __init__(self, camera_height=1.4, focal_length_factor=0.8,
+                 horizon_ratio=0.46):
+        """
+        camera_height: dashcam height above the road in metres. Estimate 1.4m.
+                       Scales ALL distances linearly - see calibration note.
+
+        focal_length_factor: focal_length_pixels = frame_width * this factor.
+                       0.8 is a rough estimate. Also scales all distances
+                       linearly, so (camera_height * focal_length_factor) is the
+                       single calibration constant for the whole system.
+
+        horizon_ratio: where the horizon sits in the CROPPED frame, as a
+                       fraction of cropped height from the top. Default 0.46 is
+                       derived from the 0.20/0.85 crop in preprocessor.py (see
+                       class docstring). Increase it if distances read too SMALL
+                       (horizon assumed too high); decrease if too LARGE.
+
+        CALIBRATION NOTE:
+        To calibrate against the video, find a vehicle whose real distance you
+        can estimate - German Autobahn lane dashes are 6m painted + 12m gap =
+        18m period, so you can literally count dashes to a car. If the code
+        reports d_measured but the real distance is d_real, multiply
+        focal_length_factor by (d_real / d_measured) and rerun. One good
+        reference fixes every distance in the dataset.
         """
         self.camera_height = camera_height
         self.focal_length_factor = focal_length_factor
+        self.horizon_ratio = horizon_ratio
 
-        # stores the previous frame's grayscale image for optical flow
+        # previous-frame grayscale image, used by optical flow for EMAP
         self.prev_gray = None
 
-        # stores the last known position of each vehicle (keyed by track_id)
-        # used to compute how far it moved between frames
-        self.prev_positions_px  = {}  # pixel positions (used as fallback)
-        self.prev_positions_m   = {}  # metric positions (used when depth available)
+        # previous METRIC position per track_id -> (x_m, y_m)
+        # used to compute relative velocity by differencing positions
+        self.prev_positions_m = {}
 
-        # stores the last known speed and acceleration per vehicle
-        # needed to compute acceleration and jerk
-        self.prev_speeds        = {}
+        # previous PIXEL centre per track_id -> [px, py]
+        # used only by estimate_heading (a pixel-space angle)
+        self.prev_positions_px = {}
+
+        # previous speed / acceleration per track_id, for accel and jerk
+        self.prev_speeds = {}
         self.prev_accelerations = {}
 
-        # the camera odometry matrix from the last frame
-        # 3x3 homography that describes how the camera moved
-        # identity matrix = camera did not move at all
+        # last camera-motion homography (for EMAP); identity = no motion
         self.current_ego_H = np.eye(3)
 
-        # depth estimator - loads Depth Anything V2 if available
+        # Depth Anything V2 wrapper - still loaded, used by EMAP only
         self.depth_estimator = DepthEstimator()
-
-        # cache the depth map for the current frame so we do not run
-        # the model twice (once in process_frame and once in get_bev_position)
         self.current_depth_map = None
 
     # ------------------------------------------------------------------
-    # STEP 1 - EGO MOTION (camera odometry)
+    # EGO MOTION (camera odometry) - feeds EMAP in tracker.py
     # ------------------------------------------------------------------
 
     def estimate_ego_motion(self, frame):
         """
-        Figures out how the camera itself moved between this frame and the
-        last frame. Returns a 3x3 homography matrix H.
+        Estimate how the camera moved between the previous frame and this one,
+        as a 3x3 homography H. Uses Lucas-Kanade optical flow on background
+        feature points, then RANSAC to fit H while rejecting moving vehicles.
 
-        How it works:
-        We pick ~200 corner-like points in the previous frame (background
-        features like road markings, barriers, trees - things that are not
-        moving themselves). We then find where those same points ended up
-        in the current frame using Lucas-Kanade optical flow. From those
-        point correspondences we estimate the homography (a matrix that
-        describes rotation + translation of the camera between frames).
-
-        Why this matters for EMAP:
-        EMAP takes this H matrix and uses it to predict where each tracked
-        vehicle WOULD appear in the new frame if only the camera had moved
-        and the vehicle had stayed still. It then compares that prediction
-        to where the vehicle actually appeared. The difference is the
-        vehicle's own motion. This is what EMAP subtracts from the
-        Kalman Filter state.
-
-        Returns np.eye(3) (identity = no movement) if there are not enough
-        feature points to estimate motion reliably.
+        This H is consumed by the EMAP tracker to subtract camera motion from
+        the Kalman Filter prediction. It is NOT used for distance any more.
+        Returns identity (no motion) when there are too few stable points.
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         if self.prev_gray is None:
-            # First frame - nothing to compare against yet
             self.prev_gray = gray
             return np.eye(3)
 
-        # Find corner-like points in the previous frame.
-        # We avoid areas near the bottom (where vehicles are) to get
-        # mostly background (road surface, barriers, sky edge).
-        # qualityLevel=0.01 means accept any point with at least 1% of
-        # the quality of the best point found.
         prev_pts = cv2.goodFeaturesToTrack(
-            self.prev_gray,
-            maxCorners=300,
-            qualityLevel=0.01,
-            minDistance=8
+            self.prev_gray, maxCorners=300, qualityLevel=0.01, minDistance=8
         )
-
         if prev_pts is None or len(prev_pts) < 8:
-            # Not enough stable background points - cannot estimate motion.
-            # This can happen in tunnels or low-texture scenes.
             self.prev_gray = gray
             return np.eye(3)
 
-        # Track those points into the current frame
         curr_pts, status, _ = cv2.calcOpticalFlowPyrLK(
             self.prev_gray, gray, prev_pts, None,
-            winSize=(21, 21),   # search window around each point
-            maxLevel=3          # pyramid levels - handles large motion better
+            winSize=(21, 21), maxLevel=3
         )
-
-        # Keep only points that were successfully tracked (status == 1)
         good_prev = prev_pts[status == 1]
         good_curr = curr_pts[status == 1]
-
         if len(good_prev) < 8:
             self.prev_gray = gray
             return np.eye(3)
 
-        # Estimate homography from the matched point pairs.
-        # RANSAC automatically discards outliers (moving vehicles that
-        # snuck into our background point set).
-        H, inlier_mask = cv2.findHomography(
-            good_prev, good_curr,
-            cv2.RANSAC,
-            ransacReprojThreshold=3.0  # pixels - stricter than old version's 5.0
+        H, _ = cv2.findHomography(
+            good_prev, good_curr, cv2.RANSAC, ransacReprojThreshold=3.0
         )
-
         self.prev_gray = gray
-
         if H is None:
             return np.eye(3)
-
         self.current_ego_H = H
         return H
 
-    # ------------------------------------------------------------------
-    # STEP 2 - DEPTH MAP
-    # ------------------------------------------------------------------
-
     def compute_depth_map(self, frame):
         """
-        Run Depth Anything V2 on the current frame and cache the result.
-        Call this once per frame before calling get_bev_position or estimate_speed.
-
-        Returns the depth map (2D array in meters) or None if unavailable.
+        Run Depth Anything V2 and cache the result. Used by EMAP only.
+        Returns the depth map (2D array) or None if the model is unavailable.
         """
         self.current_depth_map = self.depth_estimator.estimate_depth(frame)
         return self.current_depth_map
 
     # ------------------------------------------------------------------
-    # STEP 3 - POSITION IN METERS (BEV)
+    # POSITION - ground-plane pinhole projection (the fix)
     # ------------------------------------------------------------------
 
     def get_bev_position(self, bottom_center, frame_width, frame_height, bbox=None):
         """
-        Convert a vehicle's pixel position to real-world metres (x = lateral,
-        y = forward distance from the ambulance).
+        Project a vehicle's bottom-centre pixel onto the road plane and return
+        its real-world position relative to the ambulance, in metres:
 
-        If a depth map is available and a bbox is provided, we use the depth
-        value at the vehicle location to compute distance directly.
-        Otherwise we fall back to the old pinhole geometry formula.
+            x_meters  (lateral): + = vehicle is to the RIGHT of centre
+            y_meters  (forward): distance straight ahead, always >= 0,
+                                 larger = further away
 
-        bottom_center: [px, py] pixel coordinate of the bottom-centre of the bbox
-        bbox: [x1, y1, x2, y2] full bounding box - used to sample the depth map
+        Geometry (see class docstring for the full explanation):
+            pixels_below_horizon = bottom_y - horizon_row
+            y_forward = camera_height * focal_length / pixels_below_horizon
+            x_lateral = (bottom_x - image_centre_x) * y_forward / focal_length
+
+        bbox is accepted for signature compatibility but no longer used -
+        position is pure geometry now, no depth.
         """
-        focal_length = frame_width * self.focal_length_factor
-        cx = frame_width / 2
+        f = frame_width * self.focal_length_factor
+        cx = frame_width / 2.0
 
-        # --- Method A: depth map available ---
-        if self.current_depth_map is not None and bbox is not None:
-            depth_m = self.depth_estimator.get_vehicle_depth(
-                self.current_depth_map, bbox
-            )
-            if depth_m is not None and depth_m > 0.1:
-                # With real depth we can unproject pixel position directly.
-                # Lateral offset: how far left/right of centre the vehicle is.
-                # forward_dist = depth (we already have it from the depth map)
-                px_offset = bottom_center[0] - cx
-                lateral_m = (px_offset * depth_m) / focal_length
-                return round(float(lateral_m), 2), round(float(depth_m), 2)
+        # horizon row inside the cropped frame
+        horizon_row = self.horizon_ratio * frame_height
 
-        # --- Method B: fallback pinhole geometry (no depth map) ---
-        # This is the old method - works but underestimates at distance.
-        cy = frame_height / 2
-        py = bottom_center[1] - cy
-        if py <= 0:
-            return 0.0, 0.0
-        distance_forward = (self.camera_height * focal_length) / py
-        px_offset = bottom_center[0] - cx
-        distance_lateral = (px_offset * distance_forward) / focal_length
-        return round(float(distance_lateral), 2), round(float(distance_forward), 2)
+        bottom_x = bottom_center[0]
+        bottom_y = bottom_center[1]
+
+        # how many pixels below the horizon the wheels sit
+        delta_y = bottom_y - horizon_row
+
+        # a vehicle at or above the horizon line is geometrically at/near
+        # infinity - clamp delta_y so we never divide by zero or go negative
+        min_delta = (self.camera_height * f) / self.MAX_FORWARD_METERS
+        if delta_y < min_delta:
+            delta_y = min_delta
+
+        y_forward = (self.camera_height * f) / delta_y
+        if y_forward > self.MAX_FORWARD_METERS:
+            y_forward = self.MAX_FORWARD_METERS
+
+        x_lateral = ((bottom_x - cx) * y_forward) / f
+
+        return round(float(x_lateral), 2), round(float(y_forward), 2)
 
     # ------------------------------------------------------------------
-    # STEP 4 - SPEED (ego-motion compensated)
+    # VELOCITY - relative, derived from metric position change
     # ------------------------------------------------------------------
 
-    def estimate_speed(self, track_id, curr_center_px, frame_width,
-                       frame_height, bbox=None, dt=1.0):
+    def estimate_relative_velocity(self, track_id, x_m, y_m, dt=1.0):
         """
-        Compute the true speed of a vehicle in km/h by:
-        1. Finding where the vehicle was last frame (in pixels)
-        2. Compensating for how much of that movement was caused by the
-           ambulance moving (ego motion)
-        3. Converting the remaining pixel movement to real metres using
-           either the depth map or the lane-width scale
-        4. Dividing by time (1 second at 1Hz) and converting to km/h
+        Compute the vehicle's velocity RELATIVE TO THE AMBULANCE by how far its
+        metric position moved since the last frame. Returns three values:
 
-        track_id: which vehicle we are computing for
-        curr_center_px: [px, py] bounding box centre in pixels this frame
-        bbox: full bounding box [x1,y1,x2,y2] for depth sampling
-        dt: time between frames in seconds (always 1.0 at 1Hz)
+            forward_speed_ms : along the road, m/s.
+                               + = moving AWAY from ego, - = moving TOWARD ego
+            lateral_speed_ms : across the road, m/s.
+                               + = moving RIGHT, - = moving LEFT
+            speed_kmh        : overall magnitude in km/h (for backward
+                               compatibility with the old speed_kmh field)
+
+        Why split it:
+        A braking car changes mainly forward_speed. A yielding car changes
+        mainly lateral_speed. One combined number hides which is happening;
+        the split makes the yield signal directly readable.
+
+        This both reads AND updates the stored previous metric position, so it
+        must be called exactly once per vehicle per frame.
         """
-        prev_px = self.prev_positions_px.get(track_id)
+        prev = self.prev_positions_m.get(track_id)
+        self.prev_positions_m[track_id] = (x_m, y_m)
 
-        # First time we see this vehicle - no previous position to compare
-        if prev_px is None:
-            self.prev_positions_px[track_id] = curr_center_px
-            return 0.0
+        if prev is None:
+            # first sighting - no previous position to difference against
+            return 0.0, 0.0, 0.0
 
-        # --- ego motion compensation ---
-        # The ego homography H tells us: if the camera moved by H between
-        # frames, then a stationary point at prev_px would now appear at
-        # projected_px. So (curr_center_px - projected_px) is the vehicle's
-        # OWN movement in pixel space, with the camera motion removed.
-        prev_pt = np.array([[[float(prev_px[0]), float(prev_px[1])]]], dtype=np.float32)
-        projected = cv2.perspectiveTransform(prev_pt, self.current_ego_H)
-        projected_px = projected[0][0]  # where prev point ended up due to camera motion alone
+        dx = x_m - prev[0]   # + = moved right
+        dy = y_m - prev[1]   # + = moved further ahead (away from ego)
 
-        # True vehicle motion in pixels = actual position minus camera-caused drift
-        dx_px = curr_center_px[0] - projected_px[0]
-        dy_px = curr_center_px[1] - projected_px[1]
+        lateral_speed = dx / dt
+        forward_speed = dy / dt
+        speed_kmh = (np.sqrt(dx * dx + dy * dy) / dt) * 3.6
 
-        # --- convert pixels to metres ---
-        if self.current_depth_map is not None and bbox is not None:
-            # Use depth to get accurate scale at this vehicle's distance
-            depth_m = self.depth_estimator.get_vehicle_depth(
-                self.current_depth_map, bbox
-            )
-            if depth_m is not None and depth_m > 0.1:
-                focal_length = frame_width * self.focal_length_factor
-                # At distance D, one pixel = D / focal_length metres
-                metres_per_pixel = depth_m / focal_length
-                dx_m = dx_px * metres_per_pixel
-                dy_m = dy_px * metres_per_pixel
-            else:
-                dx_m, dy_m = self._pixels_to_metres_fallback(dx_px, dy_px, frame_width)
-        else:
-            # Fallback: assume uniform scale using lane width
-            # This is the old method - still better than nothing
-            dx_m, dy_m = self._pixels_to_metres_fallback(dx_px, dy_px, frame_width)
-
-        distance_m = np.sqrt(dx_m**2 + dy_m**2)
-        speed_kmh = round((distance_m / dt) * 3.6, 2)
-
-        # Update stored position for next frame
-        self.prev_positions_px[track_id] = curr_center_px
-
-        return speed_kmh
-
-    def _pixels_to_metres_fallback(self, dx_px, dy_px, frame_width):
-        """
-        Old scale method: assume 3 lanes fill the full frame width.
-        3 lanes × 3.75m = 11.25m across frame_width pixels.
-        This is wrong at any depth other than the lane centre plane,
-        but it is the best we can do without a depth map.
-        """
-        scale = (3 * self.LANE_WIDTH_METERS) / frame_width
-        return dx_px * scale, dy_px * scale
-
-    def estimate_split_velocity(self, track_id, curr_center_px, frame_width,
-                                frame_height, bbox=None, dt=1.0):
-        """
-        Split the vehicle's motion into two separate speeds instead of one:
-
-          forward_speed  = how fast it moves ALONG the road (toward/away ego)
-          lateral_speed  = how fast it moves ACROSS the road (left/right)
-
-        Why we want this:
-        A single overall speed cannot tell us WHAT kind of motion happened.
-        A braking car slows down -> change shows up in forward_speed.
-        A yielding car pulls to the side -> change shows up in lateral_speed.
-        With one combined number both look the same. Splitting makes the
-        yielding signal directly visible: "this car moved 2 m/s to the left"
-        is a far cleaner yield indicator than our heading-angle approximation.
-
-        Sign convention (matches image axes after BEV reasoning):
-          forward_speed > 0  -> moving AWAY from ego (up the image, smaller y px)
-          forward_speed < 0  -> moving TOWARD ego (down the image, getting closer)
-          lateral_speed > 0  -> moving RIGHT (larger x px)
-          lateral_speed < 0  -> moving LEFT (smaller x px)
-
-        Units: metres per second (NOT km/h - m/s is the natural unit for the
-        yielding thresholds the annotator uses, e.g. "lateral > 0.5 m/s").
-
-        This reuses the exact same ego-motion compensation and depth-based
-        pixel-to-metre conversion as estimate_speed(). The only difference is
-        we keep the x and y components separate instead of combining them
-        with sqrt(dx² + dy²).
-
-        IMPORTANT: this method reads prev_positions_px but does NOT update it.
-        estimate_speed() is responsible for updating that store. So call
-        estimate_speed() FIRST each frame, then this method, so both see the
-        same previous position. (main.py does this in the right order.)
-        """
-        prev_px = self.prev_positions_px.get(track_id)
-        if prev_px is None:
-            # first sighting - no previous frame to compare against
-            return 0.0, 0.0
-
-        # --- ego-motion compensation (same as estimate_speed) ---
-        # project the previous pixel position forward by the camera motion H.
-        # whatever movement is LEFT OVER after that is the vehicle's own motion.
-        prev_pt = np.array([[[float(prev_px[0]), float(prev_px[1])]]], dtype=np.float32)
-        projected = cv2.perspectiveTransform(prev_pt, self.current_ego_H)
-        projected_px = projected[0][0]
-
-        dx_px = curr_center_px[0] - projected_px[0]   # + = moved right
-        dy_px = curr_center_px[1] - projected_px[1]   # + = moved down the image
-
-        # --- convert pixel movement to metres (same scale logic as speed) ---
-        if self.current_depth_map is not None and bbox is not None:
-            depth_m = self.depth_estimator.get_vehicle_depth(
-                self.current_depth_map, bbox
-            )
-            if depth_m is not None and depth_m > 0.1:
-                focal_length = frame_width * self.focal_length_factor
-                metres_per_pixel = depth_m / focal_length
-                dx_m = dx_px * metres_per_pixel
-                dy_m = dy_px * metres_per_pixel
-            else:
-                dx_m, dy_m = self._pixels_to_metres_fallback(dx_px, dy_px, frame_width)
-        else:
-            dx_m, dy_m = self._pixels_to_metres_fallback(dx_px, dy_px, frame_width)
-
-        # lateral speed = horizontal motion (across the road)
-        lateral_speed = dx_m / dt
-
-        # forward speed = vertical motion, sign flipped so that moving UP the
-        # image (away from ego, smaller y) is POSITIVE forward speed.
-        # in image coords y grows downward, so we negate.
-        forward_speed = -dy_m / dt
-
-        return round(float(forward_speed), 2), round(float(lateral_speed), 2)
-
-    # ------------------------------------------------------------------
-    # STEP 5 - ACCELERATION, JERK, HEADING (unchanged in logic)
-    # ------------------------------------------------------------------
+        return (round(float(forward_speed), 2),
+                round(float(lateral_speed), 2),
+                round(float(speed_kmh), 2))
 
     def estimate_acceleration(self, track_id, curr_speed, dt=1.0):
         """
-        Acceleration = how much speed changed since last frame, in m/s².
-        We store the previous speed per vehicle and subtract.
-        High negative acceleration = hard braking.
+        Acceleration in m/s^2 = change in speed_kmh since last frame, converted
+        to m/s. Large negative value = hard braking.
         """
         prev_speed = self.prev_speeds.get(track_id, curr_speed)
-        # speed is in km/h, convert difference to m/s before dividing by time
         speed_diff_ms = (curr_speed - prev_speed) / 3.6
         acceleration = round(speed_diff_ms / dt, 3)
         self.prev_speeds[track_id] = curr_speed
@@ -566,10 +471,8 @@ class HomographyEstimator:
 
     def estimate_jerk(self, track_id, curr_acceleration, dt=1.0):
         """
-        Jerk = how much acceleration changed since last frame, in m/s³.
-        High jerk = sudden change in braking force = panic stop or release.
-        Used by annotator Rule 2 to distinguish smooth deceleration from
-        abrupt braking.
+        Jerk in m/s^3 = change in acceleration since last frame. High jerk =
+        sudden change in braking force (panic stop or release).
         """
         prev_acc = self.prev_accelerations.get(track_id, curr_acceleration)
         jerk = round((curr_acceleration - prev_acc) / dt, 3)
@@ -578,69 +481,38 @@ class HomographyEstimator:
 
     def estimate_heading(self, track_id, curr_center_px):
         """
-        Heading angle in degrees: direction the vehicle is travelling.
-        0° = straight ahead (moving up in image = moving away from ambulance).
-        Positive = drifting right, negative = drifting left.
-
-        We use raw pixel positions here (not ego-compensated) because heading
-        is used for lane-change detection, and a gradual lateral drift is
-        what we are looking for whether or not the ambulance is also moving.
+        Heading angle in degrees from pixel motion. 0 = straight, + = drifting
+        right, - = left. Kept in pixel space because it is only a direction.
+        Reads and updates its own pixel-position store.
         """
         prev = self.prev_positions_px.get(track_id)
+        self.prev_positions_px[track_id] = curr_center_px
         if prev is None:
             return 0.0
         dx = curr_center_px[0] - prev[0]
         dy = curr_center_px[1] - prev[1]
-        angle = round(float(np.degrees(np.arctan2(dy, dx))), 2)
-        return angle
+        return round(float(np.degrees(np.arctan2(dy, dx))), 2)
 
     # ------------------------------------------------------------------
-    # STEP 6 - DISTANCE, LANE, LATERAL OFFSET
+    # DISTANCE / LANE / LATERAL OFFSET
     # ------------------------------------------------------------------
 
-    def estimate_distance_to_ego(self, vehicle_center_px, frame_width,
-                                  frame_height, bbox=None):
+    def estimate_distance_to_ego(self, x_m, y_m):
         """
-        Distance in metres from the vehicle to the ambulance (ego).
-
-        If depth is available, use the vehicle's depth value directly -
-        this is the forward distance and is already in real metres.
-
-        Fallback: measure pixel distance from vehicle centre to the bottom
-        centre of the frame (where the ambulance bonnet is), scaled by the
-        lane-width factor. This was the old method and underestimates badly
-        at range.
-
-        Bug fix from old version: old code used frame_width as the y
-        coordinate for ego position instead of frame_height. Fixed here.
+        Straight-line distance from the vehicle to the ambulance in metres.
+        The ambulance is the origin (0,0) of our coordinate system, so this is
+        simply sqrt(x^2 + y^2) of the vehicle's metric position. No separate
+        approximation needed any more.
         """
-        if self.current_depth_map is not None and bbox is not None:
-            depth_m = self.depth_estimator.get_vehicle_depth(
-                self.current_depth_map, bbox
-            )
-            if depth_m is not None and depth_m > 0.1:
-                # Lateral distance from centre
-                focal_length = frame_width * self.focal_length_factor
-                px_offset = vehicle_center_px[0] - frame_width / 2
-                lateral_m = (px_offset * depth_m) / focal_length
-                # Total 3D distance = sqrt(forward² + lateral²)
-                return round(float(np.sqrt(depth_m**2 + lateral_m**2)), 2)
-
-        # Fallback (old method, bug fixed)
-        ego_center = [frame_width // 2, frame_height]  # was frame_width, now frame_height
-        scale = (3 * self.LANE_WIDTH_METERS) / frame_width
-        dx = (vehicle_center_px[0] - ego_center[0]) * scale
-        dy = (vehicle_center_px[1] - ego_center[1]) * scale
-        return round(float(np.sqrt(dx**2 + dy**2)), 2)
+        return round(float(np.sqrt(x_m * x_m + y_m * y_m)), 2)
 
     def estimate_lane_id(self, center_x, frame_width):
         """
-        Which of the 3 lanes is the vehicle in?
-        Lane 1 = leftmost, Lane 2 = centre, Lane 3 = rightmost.
-
-        This is still the equal-thirds approximation because lane detection
-        failed (see lane_detector.py). Do not change this without first
-        fixing lane_detector.py.
+        Lane number 1 (left) to 3 (right) by horizontal pixel position.
+        STILL the equal-thirds approximation because lane-line detection is
+        unsolved (see lane_detector.py). Do not "fix" this without first
+        solving lane_detector.py. Note: surrounding.py does NOT rely on this -
+        it buckets lanes from metric x instead, which is more reliable.
         """
         lane_width_px = frame_width / 3
         lane = int(center_x / lane_width_px) + 1
@@ -648,34 +520,26 @@ class HomographyEstimator:
 
     def estimate_lateral_offset(self, center_x, frame_width):
         """
-        How far is the vehicle from the centre of its lane, in metres?
-        Positive = right of lane centre, negative = left.
-
-        Used by annotator Rule 1 (lateral speed > 0.5 m/s) and Rule 3
-        (cumulative lateral drift > 0.8m over 3s).
+        Distance from the estimated lane centre in metres. + = right of centre.
+        Uses the same equal-thirds lane assumption as estimate_lane_id, with
+        the same limitation.
         """
         scale = (3 * self.LANE_WIDTH_METERS) / frame_width
         lane_width_px = frame_width / 3
         lane_id = self.estimate_lane_id(center_x, frame_width)
         lane_center_px = (lane_id - 0.5) * lane_width_px
-        offset = round((center_x - lane_center_px) * scale, 2)
-        return offset
+        return round((center_x - lane_center_px) * scale, 2)
 
     # ------------------------------------------------------------------
-    # CONVENIENCE: process one full frame
+    # CONVENIENCE - run ego motion + depth once per frame for the tracker
     # ------------------------------------------------------------------
 
     def process_frame(self, frame):
         """
-        Call this once per frame at the start of the pipeline loop.
-        It runs ego motion estimation and depth estimation together and
-        caches both results internally.
-
-        Returns (ego_H, depth_map) so the caller (main.py) can pass
-        ego_H to the EMAP tracker if needed.
-
-        main.py should call this BEFORE calling tracker.update() so that
-        the tracker gets the freshest ego_H for EMAP compensation.
+        Call once per frame before tracking. Runs ego-motion estimation and
+        depth estimation, caches both, and returns (ego_H, depth_map) so main.py
+        can hand them to the EMAP tracker. Position/velocity no longer depend on
+        these - they are purely for EMAP.
         """
         ego_H = self.estimate_ego_motion(frame)
         depth_map = self.compute_depth_map(frame)
