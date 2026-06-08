@@ -12,9 +12,9 @@ It does one job: detect vehicles using YOLO and return bounding boxes
         7: "truck"
     }
 
-    def __init__(self, model_size="yolov8m.pt"):
+    def __init__(self, model_size="yolov8x.pt"):
         self.model = YOLO(model_size)
-        print("YOLO model loaded")
+        print(f"YOLO model loaded: {model_size}")
 
     def detect(self, frame):
         results = self.model(frame, verbose=False)[0]

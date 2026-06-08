@@ -9,6 +9,7 @@ from annotator import HeuristicAnnotator
 from emergency_detector import EmergencyDetector
 from scene_classifier import SceneClassifier
 from surrounding import SurroundingVehicles
+from lane_config import LaneConfig
 
 """
 Pipeline overview - same as before but with two new steps added per frame:
@@ -57,6 +58,7 @@ annotation, JSON export) is unchanged.
 # load scene classifier once - it is a large ResNet18, loading per video
 # would waste several seconds per video for no reason
 sc = SceneClassifier()
+lc = LaneConfig()
 
 
 def process_video(video_path):
@@ -144,8 +146,9 @@ def process_video(video_path):
             # distance to ego = straight-line distance from origin to (x_m, y_m)
             distance_to_ego = h.estimate_distance_to_ego(x_m, y_m)
 
-            lane_id        = h.estimate_lane_id(center[0], frame_width)
-            lateral_offset = h.estimate_lateral_offset(center[0], frame_width)
+            lane_info      = lc.get_lane_info(video_name, timestamp)
+            lane_id        = h.estimate_lane_id(center[0], frame_width, lane_info)
+            lateral_offset = h.estimate_lateral_offset(center[0], frame_width, lane_info)
 
             vehicles.append({
                 "track_id":       tid,
@@ -162,15 +165,14 @@ def process_video(video_path):
                 "heading_angle":  heading,
                 "lane_id":        lane_id,
                 "lateral_offset": lateral_offset,
-                "distance_to_ego": distance_to_ego
+                "distance_to_ego": distance_to_ego,
+                "lanes_total":    lane_info["lanes"],
+                "road_type":      lane_info["road_type"]
             })
 
-        # NEW: assign highD-style surrounding vehicle IDs.
-        # This runs ONCE per frame AFTER all vehicles have x_meters / y_meters,
-        # because it needs to compare every vehicle against every other vehicle.
-        # It adds preceding_id, following_id, left/right_preceding/following_id
-        # to each vehicle dict in place.
-        sv.assign(vehicles)
+        # surrounding IDs: runs ONCE per frame after all vehicles have positions.
+        # pass lane_info so it uses the correct lane width for same/left/right bucketing
+        sv.assign(vehicles, lane_info)
 
         emergency_active, triggered_by = ed.is_emergency_active(
             timestamp, frame, vehicles, prev_vehicles

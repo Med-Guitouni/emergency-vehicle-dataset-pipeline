@@ -49,8 +49,7 @@ if not videos:
 p = VideoPreprocessor(videos[0])
 d = VehicleDetector()
 t = VehicleTracker()
-h = HomographyEstimator()
-
+h = HomographyEstimator(horizon_ratio=0.55)
 frames = p.extract_frames(fps=1)
 
 print(f"\nInspecting first {N_FRAMES} frames of {os.path.basename(videos[0])}")

@@ -18,3 +18,4 @@ EMAP/
 models/
 *.pth
 *.wav
+yolov8*.pt
