@@ -1,8 +1,10 @@
 {
   "timestamp": 906,
   "video_source": "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ",
-  "emergency_active": false,
-  "emergency_triggered_by": [],
+  "emergency_active": true,
+  "emergency_triggered_by": [
+    "siren"
+  ],
   "scenario_type": "highway",
   "vehicles": []
 }

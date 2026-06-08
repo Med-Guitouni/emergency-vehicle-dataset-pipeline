@@ -109,6 +109,7 @@ def process_video(video_path):
         # the Kalman Filter state before ByteTrack runs matching
         tracked = t.update(d.model, frame, ego_H=ego_H, depth_map=depth_map)
 
+        lane_info = lc.get_lane_info(video_name, timestamp)
         vehicles = []
         for v in tracked:
             tid    = v["track_id"]
@@ -146,7 +147,6 @@ def process_video(video_path):
             # distance to ego = straight-line distance from origin to (x_m, y_m)
             distance_to_ego = h.estimate_distance_to_ego(x_m, y_m)
 
-            lane_info      = lc.get_lane_info(video_name, timestamp)
             lane_id        = h.estimate_lane_id(center[0], frame_width, lane_info)
             lateral_offset = h.estimate_lateral_offset(center[0], frame_width, lane_info)
 

@@ -8,43 +8,33 @@
   "scenario_type": "highway",
   "vehicles": [
     {
-      "id": 67,
-      "type": "truck",
-      "x_meters": 0.01,
-      "y_meters": 0.15,
-      "speed_kmh": 0.009999999776482582,
-      "acceleration": 0.003000000026077032,
-      "jerk": 0.003000000026077032,
-      "heading_angle": 0.0,
-      "lane_id": 2,
-      "lateral_offset": 0.81,
-      "distance_to_ego": 0.15,
-      "behaviour": "failed_to_yield",
-      "bbox": [
-        353,
-        124,
-        379,
-        151
-      ]
-    },
-    {
       "id": 14,
       "type": "truck",
-      "x_meters": 0.59,
-      "y_meters": 1.56,
-      "speed_kmh": 0.23999999463558197,
-      "acceleration": -0.2329999953508377,
-      "jerk": -0.5139999985694885,
-      "heading_angle": 0.0,
+      "x_meters": 2.72,
+      "y_meters": 7.08,
+      "speed_kmh": 1.26,
+      "forward_speed_ms": -0.21,
+      "lateral_speed_ms": 0.28,
+      "acceleration": 0.069,
+      "jerk": 0.016,
+      "heading_angle": 2.2,
       "lane_id": 3,
-      "lateral_offset": -0.36,
-      "distance_to_ego": 1.67,
+      "lateral_offset": -0.29,
+      "distance_to_ego": 7.58,
+      "lanes_total": 3,
+      "road_type": "highway",
+      "preceding_id": null,
+      "following_id": null,
+      "left_preceding_id": null,
+      "left_following_id": null,
+      "right_preceding_id": null,
+      "right_following_id": null,
       "behaviour": "failed_to_yield",
       "bbox": [
-        386,
+        395,
         0,
         640,
-        229
+        230
       ]
     }
   ]

@@ -1,8 +1,41 @@
 {
   "timestamp": 890,
   "video_source": "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ",
-  "emergency_active": false,
-  "emergency_triggered_by": [],
+  "emergency_active": true,
+  "emergency_triggered_by": [
+    "siren"
+  ],
   "scenario_type": "highway",
-  "vehicles": []
+  "vehicles": [
+    {
+      "id": 2221,
+      "type": "car",
+      "x_meters": -0.8,
+      "y_meters": 37.14,
+      "speed_kmh": 7.32,
+      "forward_speed_ms": -2.03,
+      "lateral_speed_ms": -0.11,
+      "acceleration": 1.883,
+      "jerk": 1.733,
+      "heading_angle": 153.43,
+      "lane_id": 2,
+      "lateral_offset": -0.19,
+      "distance_to_ego": 37.15,
+      "lanes_total": 3,
+      "road_type": "highway",
+      "preceding_id": null,
+      "following_id": null,
+      "left_preceding_id": null,
+      "left_following_id": null,
+      "right_preceding_id": null,
+      "right_following_id": null,
+      "behaviour": "yielded",
+      "bbox": [
+        303,
+        140,
+        315,
+        148
+      ]
+    }
+  ]
 }
