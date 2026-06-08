@@ -506,28 +506,51 @@ class HomographyEstimator:
         """
         return round(float(np.sqrt(x_m * x_m + y_m * y_m)), 2)
 
-    def estimate_lane_id(self, center_x, frame_width):
+    def estimate_lane_id(self, center_x, frame_width, lane_info=None):
         """
-        Lane number 1 (left) to 3 (right) by horizontal pixel position.
-        STILL the equal-thirds approximation because lane-line detection is
-        unsolved (see lane_detector.py). Do not "fix" this without first
-        solving lane_detector.py. Note: surrounding.py does NOT rely on this -
-        it buckets lanes from metric x instead, which is more reliable.
-        """
-        lane_width_px = frame_width / 3
-        lane = int(center_x / lane_width_px) + 1
-        return min(lane, 3)
+        Lane number 1 (left) to N (right) by horizontal pixel position.
 
-    def estimate_lateral_offset(self, center_x, frame_width):
+        Now uses the real lane count and lane width from lane_info (read from
+        video_lanes.json) instead of the old hardcoded equal-thirds assumption.
+
+        lane_info: dict with keys 'lanes' and 'lane_width_meters', returned by
+                   LaneConfig.get_lane_info(). If None, falls back to 3 equal
+                   lanes across the frame (old behaviour, kept as safety net).
+
+        Note: surrounding.py does NOT rely on this - it buckets lanes from
+        metric x_meters directly, which is more reliable.
         """
-        Distance from the estimated lane centre in metres. + = right of centre.
-        Uses the same equal-thirds lane assumption as estimate_lane_id, with
-        the same limitation.
+        if lane_info is None:
+            # old fallback - equal thirds
+            lane_width_px = frame_width / 3
+            lane = int(center_x / lane_width_px) + 1
+            return min(lane, 3)
+
+        n_lanes = lane_info["lanes"]
+        lane_width_px = frame_width / n_lanes
+        lane = int(center_x / lane_width_px) + 1
+        return min(max(lane, 1), n_lanes)
+
+    def estimate_lateral_offset(self, center_x, frame_width, lane_info=None):
         """
-        scale = (3 * self.LANE_WIDTH_METERS) / frame_width
-        lane_width_px = frame_width / 3
-        lane_id = self.estimate_lane_id(center_x, frame_width)
+        Distance from the centre of the vehicle's lane in metres.
+        + = right of lane centre, - = left of lane centre.
+
+        Uses real lane count and width from lane_info when available.
+        Falls back to 3-lane equal-thirds assumption if lane_info is None.
+        """
+        if lane_info is None:
+            n_lanes = 3
+            lane_width_m = self.LANE_WIDTH_METERS
+        else:
+            n_lanes = lane_info["lanes"]
+            lane_width_m = lane_info["lane_width_meters"]
+
+        lane_width_px = frame_width / n_lanes
+        lane_id = self.estimate_lane_id(center_x, frame_width, lane_info)
         lane_center_px = (lane_id - 0.5) * lane_width_px
+        # scale: total road width in metres / frame width in pixels
+        scale = (n_lanes * lane_width_m) / frame_width
         return round((center_x - lane_center_px) * scale, 2)
 
     # ------------------------------------------------------------------

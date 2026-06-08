@@ -60,7 +60,7 @@ class SurroundingVehicles:
     # 3.75m is one German lane, so 1.875m is the half-lane boundary.
     SAME_LANE_HALF_WIDTH = 3.75 / 2.0
 
-    def assign(self, vehicles):
+    def assign(self, vehicles, lane_info=None):
         """
         Add the six neighbour-ID fields to every vehicle in the list.
 
@@ -69,13 +69,22 @@ class SurroundingVehicles:
             "x_meters"  - lateral position (+ = right of ego centre)
             "y_meters"  - forward position (distance ahead of ego)
 
+        lane_info: dict from LaneConfig.get_lane_info() with keys:
+            "lanes"             - number of lanes
+            "lane_width_meters" - width of one lane in metres
+            If None, falls back to the default SAME_LANE_HALF_WIDTH (1.875m)
+            which assumes 3.75m Autobahn lanes.
+
         Modifies each dict in place, adding:
             "preceding_id", "following_id",
             "left_preceding_id", "left_following_id",
             "right_preceding_id", "right_following_id"
-
-        Returns the same list (for convenience).
         """
+        # use real lane width from config if available, otherwise default
+        if lane_info is not None:
+            half_width = lane_info["lane_width_meters"] / 2.0
+        else:
+            half_width = self.SAME_LANE_HALF_WIDTH
         # for each vehicle, look at every OTHER vehicle and decide:
         #   - is it in my lane / left lane / right lane?  (by lateral distance)
         #   - is it ahead of me or behind me?             (by forward distance)
@@ -112,7 +121,7 @@ class SurroundingVehicles:
                 forward_dist = abs(forward_gap)
 
                 # decide which lane the other car is in relative to me
-                if abs(lateral_gap) <= self.SAME_LANE_HALF_WIDTH:
+                if abs(lateral_gap) <= half_width:
                     lane = "same"
                 elif lateral_gap < 0:
                     lane = "left"     # other car is to my left
