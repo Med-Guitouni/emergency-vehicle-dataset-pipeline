@@ -4,6 +4,9 @@ import cv2
 import os
 
 class LaneDetector:
+
+    # not used by anything. It exists purely as documentation of what was attempted
+    # (UFLD v2, YOLOP, both failed) and as a placeholder 
     """
 ROAD BOUNDARY DETECTION - INCOMPLETE - NEEDS WORK
 
