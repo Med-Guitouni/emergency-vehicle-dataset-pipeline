@@ -1,50 +1,20 @@
 from ultralytics import YOLO
 
-class VehicleDetector:
 
-    """""
-It does one job: detect vehicles using YOLO and return bounding boxes
-"""
-    VEHICLE_CLASSES = {
-        2: "car",
-        3: "motorcycle",
-        5: "bus",
-        7: "truck"
-    }
+class VehicleDetector:
+    """
+    Loads the YOLO model. That is its only job.
+
+    NOTE: detection is actually run by tracker.py, which calls
+    model.track(...) directly on the .model attribute below (ByteTrack needs
+    to drive detection itself so it can keep track IDs across frames). So this
+    class deliberately does NOT have a detect() method any more - it would
+    never be called. main.py passes d.model straight into the tracker.
+    """
 
     def __init__(self, model_size="yolov8x.pt"):
         self.model = YOLO(model_size)
         print(f"YOLO model loaded: {model_size}")
-
-    def detect(self, frame):
-        results = self.model(frame, verbose=False)[0]
-        detections = []
-
-        for box in results.boxes:
-            class_id = int(box.cls[0])
-            confidence = float(box.conf[0])
-
-            if class_id not in self.VEHICLE_CLASSES:
-                continue
-            if confidence < 0.25:
-                continue
-
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            cx = (x1 + x2) // 2
-            cy = (y1 + y2) // 2
-
-            detections.append({
-                "bbox": [x1, y1, x2, y2],
-                "center": [cx, cy],
-                "width": x2 - x1,
-                "height": y2 - y1,
-                "class_id": class_id,
-                "type": self.VEHICLE_CLASSES[class_id],
-                "confidence": confidence,
-                "is_emergency": False
-            })
-
-        return detections
 
 
 
