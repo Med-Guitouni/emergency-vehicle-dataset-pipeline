@@ -108,8 +108,8 @@ def process_video(video_path):
         # Pass ego_H and depth_map to the tracker so EMAP can compensate
         # the Kalman Filter state before ByteTrack runs matching
         tracked = t.update(d.model, frame, ego_H=ego_H, depth_map=depth_map)
+        lane_info = lc.get_lane_info(video_name, timestamp, scenario_type)
 
-        lane_info = lc.get_lane_info(video_name, timestamp)
         vehicles = []
         for v in tracked:
             tid    = v["track_id"]
@@ -167,7 +167,8 @@ def process_video(video_path):
                 "lateral_offset": lateral_offset,
                 "distance_to_ego": distance_to_ego,
                 "lanes_total":    lane_info["lanes"],
-                "road_type":      lane_info["road_type"]
+                "road_type":      lane_info["road_type"],
+                "lane_source":    lane_info["source"]
             })
 
         # surrounding IDs: runs ONCE per frame after all vehicles have positions.

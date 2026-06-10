@@ -56,9 +56,11 @@ class JSONExporter:
                 "lateral_offset": v.get("lateral_offset", 0.0),
                 "distance_to_ego": v.get("distance_to_ego", 0.0),
 
-                # lane count and road type from video_lanes.json manual annotation
+                # lane count and road type — "config" means manual annotation,
+                # "scene_classifier" means automatic fallback (video not in config)
                 "lanes_total": v.get("lanes_total", 2),
                 "road_type":   v.get("road_type", "unknown"),
+                "lane_source": v.get("lane_source", "unknown"),
 
                 # highD-style surrounding vehicle IDs (None if no such neighbour)
                 # preceding/following = same lane, ahead/behind

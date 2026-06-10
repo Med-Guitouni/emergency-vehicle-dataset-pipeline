@@ -6,7 +6,7 @@ import os
 class LaneDetector:
 
     # not used by anything. It exists purely as documentation of what was attempted
-    # (UFLD v2, YOLOP, both failed) and as a placeholder 
+    # (UFLD v2, YOLOP, both failed) and as a placeholder
     """
 ROAD BOUNDARY DETECTION - INCOMPLETE - NEEDS WORK
 
@@ -30,11 +30,7 @@ Problem 2: lane line detection still shifts when vehicles are on the shoulder be
 the vehicles themselves are detected as visual boundaries.
 Result: same fundamental failure as UFLD - boundaries are not static.
 
-The Core Problem:
-Both approaches fail because I need a STATIC road boundary - one that does not
-change when vehicles move onto the shoulder. But lane detection models detect what
-they see visually, so a vehicle on the shoulder changes what they see.
-.
+
 """
 
     # CULane input size expected by the model

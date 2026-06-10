@@ -27,6 +27,11 @@ from ultralytics import YOLO
 # We already compute all three:
 #   - yaw_dot and D_dot come from the ego homography H in homography.py
 #   - depth comes from the Depth Anything V2 depth map in homography.py
+
+#So in practice:
+
+#ByteTrack's own Kalman Filter: still running, handles the full track lifecycle (new tracks, lost tracks, re-identification)
+#EMAP's Kalman Filter: runs before ByteTrack's matching step, corrects for camera motion
 #
 # WHAT WE CHANGED IN THE EMAP REPO AND WHY
 # ------------------------------------------
@@ -53,7 +58,6 @@ from ultralytics import YOLO
 # HOW TO SET THIS UP FROM A FRESH CLONE
 # ---------------------------------------
 # 1. Clone EMAP into the pipeline folder:
-#        cd ~/Desktop/einsatz_pipeline
 #        git clone https://github.com/noyzzz/EMAP
 #
 # 2. Remove the four ROS lines from kalman_filter.py:
@@ -71,8 +75,8 @@ from ultralytics import YOLO
 #        echo 'export PYTHONPATH=$PYTHONPATH:~/Desktop/einsatz_pipeline/EMAP' >> ~/.zshrc
 #        source ~/.zshrc
 #
-# 4. Test that it works:
-#        cd ~/Desktop/einsatz_pipeline
+# to test:
+#
 #        python3 -c "from EMAP.trackers.bytetrack.kalman_filter import KalmanFilter; print('OK')"
 #    Should print: OK
 #
@@ -89,8 +93,6 @@ class VehicleTracker:
     standard Kalman Filter inside ByteTrack with the EMAP version that
     subtracts camera motion from each vehicle's predicted position.
 
-    If EMAP is not available, falls back to standard ByteTrack.
-    Nothing crashes either way.
     """
 
     # These must match the actual frame dimensions after spatial crop.

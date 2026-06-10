@@ -5,24 +5,26 @@ import os
 class LaneConfig:
     """
     Reads video_lanes.json and answers one question per frame:
-    "How many lanes does this road have right now, and how wide are they?"
+    how wide are our road
 
     WHY THIS EXISTS
-    ---------------
-    Lane count cannot be reliably detected from the camera because:
-    - Vision-based models (UFLD v2, YOLOP) fail when vehicles cover markings
-      at exactly the moments that matter (see lane_detector.py)
-    - Videos mix highway (3 lanes, 3.75m wide) and city (1-2 lanes, 3.25m wide)
-      sometimes within the same video
-    - No GPS is embedded in the video files to query OpenStreetMap automatically
 
-    The solution: manual ground-truth annotation by the researcher watching
-    the first 20 seconds of each video (before the emergency starts, road is
-    clear) and writing down the lane count per time window. This is the most
-    scientifically defensible approach for a dataset of 32 videos.
+    Lane count cannot be reliably detected from the camera because:
+    see lane_detector.py
+    - No GPS is embedded in the video files
+
+    The solution: manual ground-truth annotation by watching each video
+    and writing down the lane count per time window. This is the most
+    correct and reliable approach
+
+
+    Lane width is derived automatically from road_type:
+        highway -> 3.75m per lane (German Autobahn standard, wiki)
+        urban   -> 3.00m per lane (mid-range of German urban standard
+                   2.50-3.25m, Uncertainty ±0.25m
+
 
     CONFIG FORMAT (video_lanes.json)
-    ---------------------------------
     {
       "video_name": [
         {
@@ -30,16 +32,14 @@ class LaneConfig:
           "to_second": 450,
           "lanes": 3,
           "road_type": "highway",
-          "lane_width_meters": 3.75,
-          "notes": "optional human note"
+          "notes": "A2 Autobahn, 3 lanes"
         },
         {
           "from_second": 450,
           "to_second": 930,
           "lanes": 2,
           "road_type": "urban",
-          "lane_width_meters": 3.25,
-          "notes": "road narrows after exit"
+          "notes": "city centre after exit"
         }
       ]
     }
@@ -47,75 +47,93 @@ class LaneConfig:
     video_name must match exactly what main.py uses:
         os.path.splitext(os.path.basename(video_path))[0][:30]
 
-    HOW TO ADD A NEW VIDEO
-    ----------------------
-    1. Watch the first 20 seconds (pre-emergency, road is clear)
-    2. Note where lane count changes (timestamp + new count)
-    3. Add an entry to video_lanes.json
-    4. Use lane_width_meters=3.75 for Autobahn, 3.25 for city streets
 
-    FALLBACK
-    --------
-    If a video is not in the config, or the timestamp falls outside all
-    defined windows, get_lane_info() returns safe defaults:
-        lanes=2, lane_width_meters=3.5, road_type="unknown"
-    This never crashes the pipeline - it just uses a conservative estimate.
+    If a video is not in the config, get_lane_info() returns safe defaults:
+        lanes=2, road_type="unknown", lane_width=3.0m
+    The pipeline never crashes - it just uses conservative estimates.
     """
 
-    # safe defaults used when no config entry is found for a timestamp
+    # German standard lane widths by road type (RASt 06)
+    LANE_WIDTHS = {
+        "highway": 3.75,  # Autobahn standard
+        "urban": 3.00,  # mid-range of German urban 2.50-3.25m
+        "intersection": 3.00,  # treat same as urban
+        "roundabout": 3.00,  # treat same as urban
+        "unknown": 3.00,  # safe fallback
+    }
+
     DEFAULT_LANES = 2
-    DEFAULT_LANE_WIDTH = 3.5
     DEFAULT_ROAD_TYPE = "unknown"
 
     def __init__(self, config_path="video_lanes.json"):
-        """
-        Load the config file once at startup.
-        config_path is relative to the pipeline root folder.
-        """
         self.config = {}
         if not os.path.exists(config_path):
-            print(f"WARNING: {config_path} not found - using default lane config for all videos")
+            print(f"WARNING: {config_path} not found - using scene classifier as road type source")
             return
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 self.config = json.load(f)
             print(f"Lane config loaded: {len(self.config)} video(s) annotated")
         except Exception as ex:
-            print(f"WARNING: could not read {config_path}: {ex} - using defaults")
+            print(f"WARNING: could not read {config_path}: {ex} - using scene classifier fallback")
 
-    def get_lane_info(self, video_name, timestamp):
+    def get_lane_info(self, video_name, timestamp, scene_type=None):
         """
         Return lane information for a specific video at a specific timestamp.
 
-        video_name: the truncated video name used internally by main.py
-                    (os.path.splitext(os.path.basename(path))[0][:30])
+        video_name: truncated video name from main.py
         timestamp:  current frame time in seconds
+        scene_type: road type from scene classifier (e.g. "highway", "urban").
+                    Used as fallback when video is not in the manual config.
+                    If manual config exists and disagrees, config wins and a
+                    warning is printed.
 
         Returns a dict with:
-            lanes            - number of lanes (int)
-            lane_width_meters - width of one lane in metres (float)
-            road_type        - "highway", "urban", or "unknown" (str)
+            lanes             - number of lanes (int)
+            lane_width_meters - derived automatically from road_type (float)
+            road_type         - "highway", "urban", etc (str)
+            source            - "config" or "scene_classifier" (str)
         """
         windows = self.config.get(video_name)
 
-        if windows is None:
-            # video not in config at all
-            return self._default()
+        if windows is not None:
+            # video is in the manual config - look up the time window
+            for window in windows:
+                if window["from_second"] <= timestamp < window["to_second"]:
+                    road_type = window.get("road_type", self.DEFAULT_ROAD_TYPE)
 
-        for window in windows:
-            if window["from_second"] <= timestamp < window["to_second"]:
-                return {
-                    "lanes":             window["lanes"],
-                    "lane_width_meters": window.get("lane_width_meters", self.DEFAULT_LANE_WIDTH),
-                    "road_type":         window.get("road_type", self.DEFAULT_ROAD_TYPE)
-                }
+                    # warn if manual config and scene classifier disagree
+                    if (scene_type is not None
+                            and scene_type != "unknown"
+                            and scene_type != road_type):
+                        print(f"  NOTE t={timestamp}s: config says '{road_type}' "
+                              f"but scene classifier says '{scene_type}' "
+                              f"-> using config (ground truth)")
 
-        # timestamp outside all defined windows (e.g. video longer than config)
-        return self._default()
+                    return {
+                        "lanes": window["lanes"],
+                        "lane_width_meters": self.LANE_WIDTHS.get(road_type, self.LANE_WIDTHS["unknown"]),
+                        "road_type": road_type,
+                        "source": "config"
+                    }
+
+            # video in config but timestamp outside all windows
+            # fall through to scene classifier fallback below
+
+        # video not in config or timestamp outside windows
+        # use scene classifier as road type source
+        road_type = scene_type if scene_type and scene_type != "unknown" else self.DEFAULT_ROAD_TYPE
+        return {
+            "lanes": self.DEFAULT_LANES,
+            "lane_width_meters": self.LANE_WIDTHS.get(road_type, self.LANE_WIDTHS["unknown"]),
+            "road_type": road_type,
+            "source": "scene_classifier"
+        }
 
     def _default(self):
         return {
-            "lanes":             self.DEFAULT_LANES,
-            "lane_width_meters": self.DEFAULT_LANE_WIDTH,
-            "road_type":         self.DEFAULT_ROAD_TYPE
+            "lanes": self.DEFAULT_LANES,
+            "lane_width_meters": self.LANE_WIDTHS[self.DEFAULT_ROAD_TYPE],
+            "road_type": self.DEFAULT_ROAD_TYPE,
+            "source": "default"
         }
