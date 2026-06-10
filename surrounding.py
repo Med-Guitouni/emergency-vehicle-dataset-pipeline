@@ -3,11 +3,17 @@ import numpy as np
 
 class SurroundingVehicles:
     """
-    Finds the highD-style "surrounding vehicle" relationships for every
-    vehicle in a single frame.
+    This class answers a simple question for each vehicle in every frame:
+    who is directly around it? For each detected vehicle it finds up to six neighbours — the car
+     directly ahead in the same lane, the car directly behind, and the cars ahead and behind in
+      the lanes to the left and right. If no vehicle exists in one of those positions,
+      that slot is left empty. This information is stored as track IDs in the JSON output,
+       so the analysis can later reconstruct relational interactions like "vehicle 301 was behind
+        vehicle 287 when it started pulling aside". Without this, the dataset would only contain
+         a flat list of independent vehicles with no information about who was next to whom,
+         which makes studying yielding behaviour —which is inherently about how drivers react to
+          what is around them  much harder.
 
-    WHAT THIS IS
-    ------------
     ByteTrack already gives every vehicle a unique ID. That tells us WHICH
     vehicles exist, but NOT how they sit relative to each other on the road.
     The highD dataset adds, for each vehicle, the IDs of its six neighbours:
@@ -19,45 +25,33 @@ class SurroundingVehicles:
         right_preceding   - car in front, lane to the RIGHT
         right_following   - car behind, lane to the RIGHT
 
-    If a neighbour does not exist (e.g. nobody in front), the ID is None.
+    If a neighbour does not exist ( nobody in front), the ID is None.
 
-    WHY WE WANT IT
-    --------------
-    Yielding is a RELATIONAL behaviour. A car pulls aside to let the ambulance
-    (or the car behind it) pass. To study that we need to know who was behind
-    whom and in which lane. A flat list of independent vehicles cannot express
-    "car 301 moved aside as car 287 approached from behind". These neighbour
-    links let the analysis reconstruct those interactions later.
+
 
     HOW WE DECIDE WHO IS A NEIGHBOUR
-    ---------------------------------
+
     We work in the real-world metre coordinates we already compute:
         x_meters = lateral position (left/right across the road, + = right)
         y_meters = forward position (distance ahead of the ambulance)
 
-    Lane is decided by lateral position (x_meters), NOT by the lane_id field.
-    We do this because lane_id comes from the broken equal-thirds assumption
-    (see lane_detector.py). Lateral metre position is more reliable for simply
-    asking "is this car in my lane, the lane left of me, or the lane right
-    of me". We bucket by lateral distance using half a lane width as the
-    boundary.
+    Lane is decided by lateral position (x_meters),if lateral gap is inferior to lanewidth/2
 
     "In front" vs "behind" is decided by forward position (y_meters):
     a larger y_meters means further ahead.
 
     LIMITATIONS
-    -----------
+
     - Accuracy depends entirely on x_meters / y_meters being correct. If the
       depth scaling is off, neighbour assignment will be off too.
     - Uses lateral metre buckets, not true detected lane lines, because lane
-      detection is unsolved (see lane_detector.py).
+      detection is unsolved .
     - Assumes a roughly straight road. On sharp curves "ahead" and "lane left"
-      get blurry. Acceptable for Autobahn highway footage.
+      get blurry. Acceptable for Autobahn
     """
 
-    # half a lane width in metres. If two vehicles are within this lateral
-    # distance of each other they count as being in the SAME lane.
-    # 3.75m is one German lane, so 1.875m is the half-lane boundary.
+    # fallback only - lane_info from LaneConfig always provides the correct width
+    # (3.75m highway, 3.00m urban). This constant is only used if lane_info is None.
     SAME_LANE_HALF_WIDTH = 3.75 / 2.0
 
     def assign(self, vehicles, lane_info=None):

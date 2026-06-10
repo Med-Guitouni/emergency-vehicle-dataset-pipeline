@@ -23,6 +23,7 @@
       "distance_to_ego": 15.97,
       "lanes_total": 3,
       "road_type": "highway",
+      "lane_source": "config",
       "preceding_id": null,
       "following_id": null,
       "left_preceding_id": null,

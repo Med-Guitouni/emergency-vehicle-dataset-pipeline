@@ -14,6 +14,8 @@ class EmergencyDetector:
     BLUE_LOW = np.array([100, 150, 100])
     BLUE_HIGH = np.array([130, 255, 255])
     BLUE_PIXEL_THRESHOLD = 200
+    #HSV isolates the blue regions,
+    # then FFT checks if they're flashing.
 
     def __init__(self, video_path):
         self.video_path = video_path
@@ -87,9 +89,7 @@ class EmergencyDetector:
         return blue_pixels > self.BLUE_PIXEL_THRESHOLD
 
     # NOTE: vehicle behaviour is never used to trigger emergency_active
-    # we are studying how behaviour differs between emergency and normal scenarios
-    # if we used behaviour to define when the emergency is active, the thing
-    # we are measuring would also be the thing we are detecting - circular logic
+
     def is_emergency_active(self, timestamp, frame, current_vehicles, prev_vehicles):
         # if emergency was already confirmed earlier in this video, keep it on
         # an ambulance does not turn its siren off and on mid-run
@@ -99,7 +99,6 @@ class EmergencyDetector:
 
         siren = self.detect_siren(timestamp)
 
-        # blue light only checked at night - see detect_blue_light comment above
         blue_light = self.detect_blue_light(frame) if self.daytime is False else False
 
         triggered_by = []

@@ -7,11 +7,12 @@ from collections import Counter
 
 class SceneClassifier:
     """
-    Classifies the driving scenario type per frame using MIT Places365 ResNet18.
+    Classifies the driving scenario type per frame using MIT Places365 ResNet18(CNN ).
     Uses a consecutive frames confirmation approach instead of a rolling window:
     a new scenario is only accepted if the same prediction appears 3 times in a row.
     This prevents single noisy frames from flipping the scenario type while still
     detecting real transitions within 3 seconds.
+
     """
 
     SCENARIO_MAP = {
