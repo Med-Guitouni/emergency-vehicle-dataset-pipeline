@@ -6,57 +6,40 @@ from tracker import VehicleTracker
 from homography import HomographyEstimator
 from exporter import JSONExporter
 from annotator import HeuristicAnnotator
-from emergency_detector import EmergencyDetector
 from scene_classifier import SceneClassifier
 from surrounding import SurroundingVehicles
 from lane_config import LaneConfig
+from smoother import RTSSmoother
 
 """
-Pipeline overview - same as before but with two new steps added per frame:
+What this pipeline does, in two phases:
 
-For each video, frames are extracted at 1Hz.
-The first 10 raw uncropped frames are sampled to determine if the video is
-daytime or not - this controls whether blue light detection is used later.
-Each frame is then spatially cropped to remove the dashboard and sky.
+PHASE 1 - COLLECT (streaming, one frame at a time at 1Hz):
+   - Crop out the sky and dashboard
+   - Run YOLO to detect vehicles, ByteTrack (+EMAP) to assign stable IDs
+   - Project each vehicle's pixel position to raw real-world metres (x, y)
+   - Flag positions from clipped bounding boxes as unreliable
+   - Classify the scene, look up lane config and emergency state
+   - Store the raw per-frame records (no metrics yet)
 
-NEW STEP A - Ego motion estimation:
-HomographyEstimator.process_frame() runs two things in one call:
-  1. Optical flow on the background to figure out how the camera moved
-     (ego_H = 3x3 homography matrix describing that movement)
-  2. Depth Anything V2 forward pass to get a depth map in metres
-     (depth_map = 2D array, one depth value per pixel)
-Both results are passed downstream.
+BETWEEN PHASES - RTS SMOOTHING:
+   Each vehicle's full raw trajectory is smoothed with a RTS
+   smoother (the same post-processing highD and INTERACTION use). This removes
+   detection jitter and pixel quantisation noise from positions BEFORE any
+   velocity/acceleration is derived from them. Unreliable (clipped-bbox)
+   measurements are down-weighted so the motion model dominates there.
 
-NEW STEP B - EMAP-aware tracking:
-tracker.update() now receives ego_H and depth_map.
-If EMAP is installed, it uses ego_H to warp the Kalman Filter state before
-ByteTrack's predict step - so tracked vehicles appear stationary when they
-are stationary, even when the ambulance is moving at highway speed.
+PHASE 2 - COMPUTE + EXPORT (sequential over the stored records):
+   - Read each vehicle's SMOOTHED position
+   - Derive split velocity, longitudinal acceleration, jerk, heading (internal)
+   - Assign lane, distance, surrounding-vehicle IDs
+   - Label behaviour (normal / yielded / braked_abruptly / failed_to_yield)
+   - Write one JSON file per second to output/video_name/
 
-For every frame, spatial metrics are computed per vehicle:
-position in meters (now from depth map instead of lane-width scale),
-speed (now ego-compensated instead of relative),
-acceleration, jerk, heading angle, lane ID, lateral offset,
-and distance to the ambulance.
-
-NEW STEP C - Split velocity:
-On top of the single combined speed, each vehicle also gets its motion
-split into forward_speed_ms (along the road) and lateral_speed_ms (across
-the road). This makes braking (forward change) and yielding (lateral change)
-directly separable instead of hidden inside one combined number.
-
-NEW STEP D - Surrounding vehicle IDs:
-After all vehicles in a frame have their metre positions, we assign each
-vehicle its six highD-style neighbours (preceding, following, and the
-left/right versions of each). This lets the analysis reconstruct who
-reacted to whom. See surrounding.py.
-
-Everything else (emergency detection, scene classification, behaviour
-annotation, JSON export) is unchanged.
+Manual inputs (video_lanes.json): lane count per time window, road type,
+and emergency_start_second. Heading is internal-only (not exported).
 """
 
-# load scene classifier once - it is a large ResNet18, loading per video
-# would waste several seconds per video for no reason
 sc = SceneClassifier()
 lc = LaneConfig()
 
@@ -71,135 +54,144 @@ def process_video(video_path):
     h  = HomographyEstimator()
     e  = JSONExporter()
     a  = HeuristicAnnotator()
-    ed = EmergencyDetector(video_path)
     sv = SurroundingVehicles()
+    sm = RTSSmoother()
 
-    # reset scene classifier smoothing window for each new video
     sc.reset()
 
-    frames = p.extract_frames(fps=1)
+    # =================================================================
+    # PHASE 1 - collect raw tracked positions per frame
+    # =================================================================
+    records = []          # one entry per second
+    track_obs = {}        # track_id -> [(timestamp, x_raw, y_raw, reliable)]
 
-    # day/night detection uses the original uncropped frames
-    # because brightness of the sky is what we are measuring
-    sample_frames = [frames[i]['frame'] for i in range(0, min(10, len(frames)))]
-    ed.daytime = ed.detect_daytime(sample_frames)
-
-    all_frames_data = []
-    prev_vehicles   = []
-
-    for item in frames:
+    for item in p.extract_frames(fps=1):
         timestamp = item["timestamp"]
+        frame_raw = item["frame"]
+        frame     = p.spatial_crop(frame_raw)
+        frame_height, frame_width = frame.shape[:2]
 
-        # scene classification needs the uncropped frame to see sky + horizon
-        scenario_type = sc.classify(item["frame"])
-
-        # everything else uses the spatially cropped frame
-        frame = p.spatial_crop(item["frame"])
-        frame_height = frame.shape[0]
-        frame_width  = frame.shape[1]
-
-        # NEW: run ego motion + depth estimation together before tracking
-        # ego_H  = how the camera moved this frame (3x3 homography)
-        # depth_map = per-pixel depth in metres from Depth Anything V2
-        # Both are cached inside h so estimate_speed / get_bev_position
-        # can use them without needing them passed as arguments each time
         ego_H, depth_map = h.process_frame(frame)
-
-        # Pass ego_H and depth_map to the tracker so EMAP can compensate
-        # the Kalman Filter state before ByteTrack runs matching
         tracked = t.update(d.model, frame, ego_H=ego_H, depth_map=depth_map)
+
+        scenario_type = sc.classify(frame_raw)
         lane_info = lc.get_lane_info(video_name, timestamp, scenario_type)
+        emergency_active, _ = lc.is_emergency_active(video_name, timestamp)
 
-        vehicles = []
+        vehicles_raw = []
         for v in tracked:
-            tid    = v["track_id"]
-            center = v["center"]
-            bbox   = v["bbox"]
-
-            # bottom centre of the bounding box = where the vehicle
-            # touches the road - best point for ground-plane geometry
+            bbox = v["bbox"]
             bottom_center = [(bbox[0] + bbox[2]) // 2, bbox[3]]
 
-            # position in metres via ground-plane pinhole projection.
-            # x_m = lateral (+ = right), y_m = forward distance ahead.
-            # This is the single source of truth - everything below derives
-            # from it, so all metrics share one coordinate system.
-            x_m, y_m = h.get_bev_position(
-                bottom_center, frame_width, frame_height
+            x_raw, y_raw = h.get_bev_position(
+                bottom_center, frame_width, frame_height, lane_info
+            )
+            reliable = h.is_position_reliable(
+                bbox, frame_width, frame_height, x_raw, lane_info
             )
 
-            # relative velocity, derived from how the metric position moved.
-            # forward_speed / lateral_speed are in m/s, speed is km/h magnitude.
-            # forward: + = moving away from ego, - = moving toward ego
-            # lateral: + = moving right, - = moving left
-            # NOTE: this is RELATIVE to the ambulance, not absolute ground speed
-            # (absolute speed needs ego odometry we do not have - see homography).
-            # Call exactly once per vehicle per frame: it updates the stored
-            # previous position internally.
+            vehicles_raw.append({
+                "track_id": v["track_id"],
+                "type":     v["type"],
+                "bbox":     bbox,
+                "center":   v["center"],
+                "reliable": reliable,
+            })
+            track_obs.setdefault(v["track_id"], []).append(
+                (timestamp, x_raw, y_raw, reliable)
+            )
+
+        records.append({
+            "timestamp":        timestamp,
+            "scenario_type":    scenario_type,
+            "lane_info":        lane_info,
+            "emergency_active": emergency_active,
+            "frame_width":      frame_width,
+            "vehicles_raw":     vehicles_raw,
+        })
+
+        if timestamp % 60 == 0:
+            print(f"  [phase 1] t={timestamp}s - {len(vehicles_raw)} vehicles"
+                  f" - emergency={emergency_active}")
+
+    # =================================================================
+    # RTS SMOOTHING - per track, over the full video
+    # =================================================================
+    print(f"  [smoothing] {len(track_obs)} tracks...")
+    smoothed = sm.smooth(track_obs)
+
+    # =================================================================
+    # PHASE 2 - metrics from smoothed positions, annotate, export
+    # =================================================================
+    all_frames_data = []
+    last_seen = {}   # track_id -> last timestamp, for correct dt across gaps
+
+    for rec in records:
+        timestamp        = rec["timestamp"]
+        lane_info        = rec["lane_info"]
+        emergency_active = rec["emergency_active"]
+        frame_width      = rec["frame_width"]
+
+        vehicles = []
+        for vr in rec["vehicles_raw"]:
+            tid    = vr["track_id"]
+            center = vr["center"]
+
+            # smoothed position (falls back to raw for very short tracks)
+            x_m, y_m = smoothed[tid][timestamp]
+
+            # real time since this track was last seen (handles gaps)
+            dt = max(timestamp - last_seen.get(tid, timestamp - 1), 1)
+            last_seen[tid] = timestamp
+
             forward_speed, lateral_speed, speed = h.estimate_relative_velocity(
-                tid, x_m, y_m
+                tid, x_m, y_m, dt
             )
+            # longitudinal acceleration (change in forward speed) - highD style
+            acceleration = h.estimate_acceleration(tid, forward_speed, dt)
+            jerk         = h.estimate_jerk(tid, acceleration, dt)
+            heading      = h.estimate_heading(tid, x_m, y_m)  # internal only
 
-            acceleration = h.estimate_acceleration(tid, speed)
-            jerk         = h.estimate_jerk(tid, acceleration)
-            heading      = h.estimate_heading(tid, center)
-
-            # distance to ego = straight-line distance from origin to (x_m, y_m)
             distance_to_ego = h.estimate_distance_to_ego(x_m, y_m)
-
-            lane_id        = h.estimate_lane_id(center[0], frame_width, lane_info)
-            lateral_offset = h.estimate_lateral_offset(center[0], frame_width, lane_info)
+            lane_id         = h.estimate_lane_id(center[0], frame_width, lane_info)
+            lateral_offset  = h.estimate_lateral_offset(center[0], frame_width, lane_info)
 
             vehicles.append({
-                "track_id":       tid,
-                "type":           v["type"],
-                "bbox":           bbox,
-                "center":         center,
-                "x_meters":       x_m,
-                "y_meters":       y_m,
-                "speed_kmh":      speed,
-                "forward_speed_ms": forward_speed,
-                "lateral_speed_ms": lateral_speed,
-                "acceleration":   acceleration,
-                "jerk":           jerk,
-                "heading_angle":  heading,
-                "lane_id":        lane_id,
-                "lateral_offset": lateral_offset,
-                "distance_to_ego": distance_to_ego,
-                "lanes_total":    lane_info["lanes"],
-                "road_type":      lane_info["road_type"],
-                "lane_source":    lane_info["source"]
+                "track_id":          tid,
+                "type":              vr["type"],
+                "bbox":              vr["bbox"],
+                "center":            center,
+                "x_meters":          x_m,
+                "y_meters":          y_m,
+                "position_reliable": vr["reliable"],
+                "speed_kmh":         speed,
+                "forward_speed_ms":  forward_speed,
+                "lateral_speed_ms":  lateral_speed,
+                "acceleration":      acceleration,
+                "jerk":              jerk,
+                "heading_angle":     heading,
+                "lane_id":           lane_id,
+                "lateral_offset":    lateral_offset,
+                "distance_to_ego":   distance_to_ego,
+                "lanes_total":       lane_info["lanes"],
+                "road_type":         lane_info["road_type"],
+                "lane_source":       lane_info["source"],
             })
 
-        # surrounding IDs: runs ONCE per frame after all vehicles have positions.
-        # pass lane_info so it uses the correct lane width for same/left/right bucketing
         sv.assign(vehicles, lane_info)
-
-        emergency_active, triggered_by = ed.is_emergency_active(
-            timestamp, frame, vehicles, prev_vehicles
-        )
 
         for v in vehicles:
             v["behaviour"] = a.annotate(v, emergency_active)
 
         all_frames_data.append({
-            "timestamp":             timestamp,
-            "emergency_active":      emergency_active,
-            "emergency_triggered_by": triggered_by,
-            "scenario_type":         scenario_type,
-            "vehicles":              vehicles
+            "timestamp":        timestamp,
+            "emergency_active": emergency_active,
+            "scenario_type":    rec["scenario_type"],
+            "vehicles":         vehicles,
         })
 
-        prev_vehicles = vehicles
-
-        if timestamp % 60 == 0:
-            print(
-                f"  t={timestamp}s"
-                f" - {len(vehicles)} vehicles"
-                f" - emergency={emergency_active}"
-                f" - scenario={scenario_type}"
-                f" - depth={'yes' if depth_map is not None else 'no'}"
-            )
+        if timestamp % 120 == 0:
+            print(f"  [phase 2] t={timestamp}s exported")
 
     e.save_batch(all_frames_data, video_name)
     return all_frames_data
@@ -211,8 +203,6 @@ if __name__ == "__main__":
     for video in videos:
         process_video(video)
     print("\nDone.")
-    # rm - rf output / *  python3  main.py
-
 
 # Test script - verifies emergency detection across first 60 seconds
 # Run: python3 test_emergency.py

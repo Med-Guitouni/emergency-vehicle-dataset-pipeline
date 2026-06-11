@@ -15,7 +15,7 @@ class DepthEstimator:
     per-object control signal that helps it associate vehicles across frames
     when the camera is moving.
 
-    IMPORTANT - depth is RELATIVE, not metric
+    depth is RELATIVE, not metric
     -----------------------------------------
     Depth Anything V2 (the non-metric checkpoint we use) outputs relative
     inverse depth - a unitless value that is monotonic with distance but is
@@ -150,6 +150,11 @@ class HomographyEstimator:
     # distance by tens of metres, so the value is unreliable past ~150m.
     MAX_FORWARD_METERS = 250.0
 
+    # how much road exists beyond the outermost lane edge (hard shoulder /
+    # Standstreifen on the Autobahn, parking strip in the city). Used to clamp
+    # physically impossible lateral positions.
+    SHOULDER_METERS = 3.0
+
     def __init__(self, camera_height=1.4, focal_length_factor=0.8,
                  horizon_ratio=0.55):
         """
@@ -173,8 +178,11 @@ class HomographyEstimator:
         # previous METRIC position per track_id -> (x_m, y_m), for velocity
         self.prev_positions_m = {}
 
-        # previous PIXEL centre per track_id -> [px, py], for heading only
-        self.prev_positions_px = {}
+        # heading history per track_id: list of (x_m, y_m) over last N frames
+        # we keep 3 entries so heading is computed over a 3-second window
+        # this smooths out the noise that makes single-frame arctan2 unreliable
+        self.heading_history_m = {}
+        self.HEADING_WINDOW = 3   # seconds / frames at 1Hz
 
         # previous speed / acceleration per track_id, for accel and jerk
         self.prev_speeds = {}
@@ -242,7 +250,8 @@ class HomographyEstimator:
     # POSITION - ground-plane pinhole projection
     # ------------------------------------------------------------------
 
-    def get_bev_position(self, bottom_center, frame_width, frame_height):
+    def get_bev_position(self, bottom_center, frame_width, frame_height,
+                         lane_info=None):
         """
         Project a vehicle's bottom-centre pixel onto the road plane. Returns:
             x_meters (lateral): + = vehicle is to the RIGHT of centre
@@ -251,6 +260,15 @@ class HomographyEstimator:
             pixels_below_horizon = bottom_y - horizon_row
             y_forward = camera_height * focal_length / pixels_below_horizon
             x_lateral = (bottom_x - image_centre_x) * y_forward / focal_length
+
+        LATERAL CLAMP (Fix 3)
+        ---------------------
+        x_lateral physically cannot exceed half the road width plus the
+        shoulder. Values beyond that come from wrong distance estimates
+        (usually edge-clipped bounding boxes) and would place vehicles in
+        the grass. We clamp to the plausible bound. The bound is derived
+        from lane_info so it automatically adapts: 3-lane Autobahn allows
+        more lateral range than a 2-lane city street.
         """
         f = frame_width * self.focal_length_factor
         cx = frame_width / 2.0
@@ -274,7 +292,62 @@ class HomographyEstimator:
 
         x_lateral = ((bottom_x - cx) * y_forward) / f
 
+        # ---- lateral plausibility clamp (lane-aware) ----
+        if lane_info is not None:
+            half_road = (lane_info["lanes"] * lane_info["lane_width_meters"]) / 2.0
+        else:
+            half_road = (3 * self.LANE_WIDTH_METERS) / 2.0
+        max_lateral = half_road + self.SHOULDER_METERS
+
+        if x_lateral > max_lateral:
+            x_lateral = max_lateral
+        elif x_lateral < -max_lateral:
+            x_lateral = -max_lateral
+
         return round(float(x_lateral), 2), round(float(y_forward), 2)
+
+    def is_position_reliable(self, bbox, frame_width, frame_height,
+                             x_m, lane_info=None):
+        """
+        Returns False when the computed position should not be trusted (Fix 2).
+
+        WHY THIS EXISTS
+        ---------------
+        The ground-plane formula projects the bottom-centre of the bounding
+        box, assuming that point is where the tyres touch the road. When the
+        bbox is CLIPPED at a frame edge - the vehicle is partially outside
+        the camera view, typical for trucks right beside the ambulance - the
+        bbox bottom is just where the visible part ends, NOT the tyre line.
+        The projected position is then wrong, sometimes by tens of metres.
+
+        Rules:
+        - bbox touches any frame edge       -> unreliable
+        - lateral position sits at the clamp -> unreliable (the clamp fired,
+          meaning the raw value was physically impossible)
+
+        The flag is exported as "position_reliable" in the JSON so the
+        analysis can filter these rows instead of silently trusting them.
+        """
+        x1, y1, x2, y2 = bbox
+        EDGE = 2  # pixels of tolerance
+
+        clipped = (x1 <= EDGE or y1 <= EDGE
+                   or x2 >= frame_width - EDGE
+                   or y2 >= frame_height - EDGE)
+        if clipped:
+            return False
+
+        # did the lateral clamp fire?
+        if lane_info is not None:
+            half_road = (lane_info["lanes"] * lane_info["lane_width_meters"]) / 2.0
+        else:
+            half_road = (3 * self.LANE_WIDTH_METERS) / 2.0
+        max_lateral = half_road + self.SHOULDER_METERS
+
+        if abs(x_m) >= max_lateral - 0.01:
+            return False
+
+        return True
 
     # ------------------------------------------------------------------
     # VELOCITY - relative, derived from metric position change
@@ -309,12 +382,21 @@ class HomographyEstimator:
                 round(float(lateral_speed), 2),
                 round(float(speed_kmh), 2))
 
-    def estimate_acceleration(self, track_id, curr_speed, dt=1.0):
-        """Acceleration in m/s^2 = change in speed_kmh, converted to m/s."""
-        prev_speed = self.prev_speeds.get(track_id, curr_speed)
-        speed_diff_ms = (curr_speed - prev_speed) / 3.6
-        acceleration = round(speed_diff_ms / dt, 3)
-        self.prev_speeds[track_id] = curr_speed
+    def estimate_acceleration(self, track_id, forward_speed_ms, dt=1.0):
+        """
+        LONGITUDINAL acceleration in m/s² = change in forward (along-road)
+        relative speed since last frame. Negative = braking relative to ego.
+
+        CHANGED from the old magnitude-based version, which differenced
+        speed_kmh (a magnitude). That produced phantom accelerations whenever
+        a vehicle's relative velocity passed through zero (magnitude collapses
+        and rebounds even though nothing physical happened). highD (Krajewski
+        et al. 2018) defines acceleration longitudinally; so do we now. This
+        also makes the -2.5 m/s² braking threshold physically meaningful.
+        """
+        prev = self.prev_speeds.get(track_id, forward_speed_ms)
+        acceleration = round((forward_speed_ms - prev) / dt, 3)
+        self.prev_speeds[track_id] = forward_speed_ms
         return acceleration
 
     def estimate_jerk(self, track_id, curr_acceleration, dt=1.0):
@@ -324,19 +406,76 @@ class HomographyEstimator:
         self.prev_accelerations[track_id] = curr_acceleration
         return jerk
 
-    def estimate_heading(self, track_id, curr_center_px):
+    def estimate_heading(self, track_id, x_m, y_m):
         """
-        Heading angle in degrees from pixel motion. 0 = straight, + = right,
-        - = left. Pixel space because it is only a direction. Reads and updates
-        its own pixel-position store.
+        Heading angle in degrees — the direction the vehicle is travelling
+        relative to the road forward axis.
+
+        0 degrees   = travelling straight ahead (same direction as ambulance)
+        positive    = drifting right
+        negative    = drifting left
+        ~90 or ~-90 = moving sideways (strong yielding signal)
+
+        WHY 3-SECOND WINDOW INSTEAD OF FRAME-TO-FRAME
+        -----------------------------------------------
+        At 1Hz, a vehicle moving at the same speed as the ambulance shifts
+        only 1-3 pixels between frames. arctan2 of 1-3 pixels of noise gives
+        a random angle — useless. By using the direction from 3 seconds ago
+        to now in metric space, the displacement is large enough to be
+        meaningful (1-5 metres for a yielding vehicle) and the noise averages
+        out over the window.
+
+        Uses x_meters/y_meters (ground-plane metric coordinates) instead of
+        pixels — consistent with how velocity is computed and more accurate.
         """
-        prev = self.prev_positions_px.get(track_id)
-        self.prev_positions_px[track_id] = curr_center_px
-        if prev is None:
+        if track_id not in self.heading_history_m:
+            self.heading_history_m[track_id] = []
+
+        history = self.heading_history_m[track_id]
+        history.append((x_m, y_m))
+
+        # keep only the last HEADING_WINDOW frames
+        if len(history) > self.HEADING_WINDOW:
+            history.pop(0)
+
+        if len(history) < 2:
+            # not enough history yet
             return 0.0
-        dx = curr_center_px[0] - prev[0]
-        dy = curr_center_px[1] - prev[1]
-        return round(float(np.degrees(np.arctan2(dy, dx))), 2)
+
+        # direction from oldest stored position to current
+        x_old, y_old = history[0]
+        dx = x_m - x_old
+        dy = y_m - y_old
+
+        if abs(dx) < 0.01 and abs(dy) < 0.01:
+            # vehicle has not moved meaningfully - no heading information
+            return 0.0
+
+        # minimum total displacement to trust the heading
+        # below 0.3m over 3 seconds the signal is too noisy to be meaningful
+        total_disp = np.sqrt(dx * dx + dy * dy)
+        if total_disp < 0.3:
+            return 0.0
+
+        # boundary case: if forward displacement is near zero but lateral is not,
+        # arctan2 snaps to exactly ±90°. This happens when a vehicle sits at
+        # nearly the same forward distance for 3 seconds (common in slow traffic
+        # being overtaken). A vehicle that hasn't moved forward is not necessarily
+        # moving sideways — it may just be stationary relative to the ambulance.
+        # Require that lateral displacement is at least 2x the forward displacement
+        # to confidently report a sideways heading. Otherwise report 0° (straight).
+        if abs(dy) < 0.1 and abs(dx) < abs(dy) * 2:
+            return 0.0
+
+        # in our BEV coordinate system:
+        #   y_m increases forward (away from ego) = road forward direction
+        #   x_m increases rightward
+        # heading = angle from the forward axis (y-axis)
+        # arctan2(dx, dy): dx=0,dy>0 → 0° (straight ahead)
+        #                  dx>0,dy=0 → 90° (moving right)
+        #                  dx<0,dy=0 → -90° (moving left)
+        angle = np.degrees(np.arctan2(dx, dy))
+        return round(float(angle), 2)
 
     # ------------------------------------------------------------------
     # DISTANCE / LANE / LATERAL OFFSET

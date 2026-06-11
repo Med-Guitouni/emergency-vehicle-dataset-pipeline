@@ -102,7 +102,7 @@ for idx, item in enumerate(frames):
         fwd, lat, spd = h.estimate_relative_velocity(tid, x_m, y_m)
         acc  = h.estimate_acceleration(tid, spd)
         jrk  = h.estimate_jerk(tid, acc)
-        hdg  = h.estimate_heading(tid, center)
+        hdg  = h.estimate_heading(tid, x_m, y_m)
         dist = h.estimate_distance_to_ego(x_m, y_m)
         lid  = h.estimate_lane_id(center[0], fw, lane_info)
         loff = h.estimate_lateral_offset(center[0], fw, lane_info)
