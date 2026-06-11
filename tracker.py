@@ -28,7 +28,7 @@ from ultralytics import YOLO
 #   - yaw_dot and D_dot come from the ego homography H in homography.py
 #   - depth comes from the Depth Anything V2 depth map in homography.py
 
-#So in practice:
+#So in practic:
 
 #ByteTrack's own Kalman Filter: still running, handles the full track lifecycle (new tracks, lost tracks, re-identification)
 #EMAP's Kalman Filter: runs before ByteTrack's matching step, corrects for camera motion
@@ -87,19 +87,21 @@ from ultralytics import YOLO
 
 class VehicleTracker:
     """
-    Runs YOLO detection + ByteTrack tracking on each frame.
+        Runs YOLO detection + ByteTrack tracking on each frame.
 
-    If EMAP is available (see setup instructions above), it replaces the
-    standard Kalman Filter inside ByteTrack with the EMAP version that
-    subtracts camera motion from each vehicle's predicted position.
+        If EMAP is available (see setup instructions above), it replaces the
+        standard Kalman Filter inside ByteTrack with the EMAP version that
+        subtracts camera motion from each vehicle's predicted position.
 
-    """
+        If EMAP is not available, falls back to standard ByteTrack.
+        Nothing crashes either way.
+        """
 
     # These must match the actual frame dimensions after spatial crop.
     # If preprocessor.py crop settings change, update these too.
     # EMAP's Kalman Filter uses these to convert pixel positions correctly.
-    IMG_WIDTH    = 1280
-    IMG_HEIGHT   = 720
+    IMG_WIDTH = 1280
+    IMG_HEIGHT = 720
 
     # Focal length estimate: frame_width * 0.8 is the same approximation
     # used in homography.py. Both should be updated together if camera
@@ -115,6 +117,12 @@ class VehicleTracker:
         self.emap_available = False
         self.emap_kalman = None
 
+        # per-track Kalman state and missed-frame counter.
+        # initialised here (not inside the EMAP try-block) so the cleanup
+        # logic in update() never crashes when EMAP is not installed.
+        self.track_states = {}
+        self.track_missed = {}
+
         try:
             from EMAP.trackers.bytetrack.kalman_filter import KalmanFilter as EmapKalmanFilter
 
@@ -126,10 +134,7 @@ class VehicleTracker:
                 self.FOCAL_LENGTH
             )
 
-            # We store per-track Kalman state ourselves because we are not
-            # using EMAP's full BYTETracker class (which needs ROS).
-            # Key: track_id  Value: (mean, covariance) numpy arrays
-            self.track_states = {}
+            # (track_states / track_missed already initialised above)
 
             self.emap_available = True
             print("EMAP Kalman Filter loaded - ego-motion compensation active")
@@ -141,7 +146,7 @@ class VehicleTracker:
         # yaw_dot: camera rotation speed in radians per frame
         # D_dot:   camera forward speed in metres per frame
         self.current_yaw_dot = 0.0
-        self.current_D_dot   = 0.0
+        self.current_D_dot = 0.0
 
         print("ByteTrack tracker ready")
 
@@ -166,7 +171,7 @@ class VehicleTracker:
 
         These are approximations - good enough for the Kalman Filter to
         subtract most of the camera motion. Not as accurate as a proper
-        IMU or GPS odometry signal, but we don't have those.
+        GPS odometry signal, but we don't have those.
         """
         if H is None:
             return 0.0, 0.0
@@ -194,8 +199,7 @@ class VehicleTracker:
         """
         Run EMAP Kalman predict step for all currently tracked vehicles.
 
-        This is what replaces the standard Kalman predict inside ByteTrack.
-        For each tracked vehicle we:
+        For each tracked vehicle:
           1. Look up its stored Kalman state (mean, covariance)
           2. Build the control signal [yaw_dot, D_dot, vehicle_depth]
           3. Call EMAP's multi_predict which subtracts camera motion
@@ -203,16 +207,25 @@ class VehicleTracker:
 
         track_ids:    list of integer track IDs active this frame
         bboxes_xyah:  list of [cx, cy, aspect, height] for each track
-                      (the format EMAP's Kalman Filter uses internally)
-        depth_map:    per-pixel depth in metres from Depth Anything V2
+        depth_map:    relative depth map from Depth Anything V2
+
+        OVERFLOW PROTECTION
+        -------------------
+        EMAP's Kalman Filter raises RuntimeWarning overflows when:
+          - vehicle_depth is too small (division by near-zero)
+          - vehicle_depth is too large (power operations overflow float64)
+          - pixel coordinates (u1, v1) are at extreme frame edges
+        We clamp all three to safe ranges. The exact depth value does not
+        matter much - EMAP only needs a rough relative ordering to subtract
+        camera motion. A fallback of 10.0m is safe for all road scenarios.
         """
         if not self.emap_available or len(track_ids) == 0:
             return
 
-        # build mean and covariance arrays for all tracks that have state
-        active_ids    = []
-        active_means  = []
-        active_covs   = []
+        # build mean and covariance arrays for tracks that have state
+        active_ids = []
+        active_means = []
+        active_covs = []
 
         for tid, xyah in zip(track_ids, bboxes_xyah):
             if tid in self.track_states:
@@ -225,22 +238,33 @@ class VehicleTracker:
             return
 
         multi_mean = np.array(active_means)
-        multi_cov  = np.array(active_covs)
+        multi_cov = np.array(active_covs)
 
-        # build control signal: [yaw_dot, D_dot, depth] per track
+        # build control signal [yaw_dot, D_dot, depth] per track
         control_signals = []
-        for tid, xyah in zip(active_ids, [bboxes_xyah[track_ids.index(t)] for t in active_ids]):
-            # get depth for this specific vehicle from the depth map
+        for tid, xyah in zip(active_ids,
+                             [bboxes_xyah[track_ids.index(t)] for t in active_ids]):
+
             if depth_map is not None:
-                cx, cy = int(xyah[0]), int(xyah[1])
                 h_img, w_img = depth_map.shape
-                cx = max(0, min(w_img - 1, cx))
-                cy = max(0, min(h_img - 1, cy))
+
+                # clamp pixel coords well away from frame edges to prevent
+                # extreme u1/v1 values in EMAP's power calculations
+                cx = int(np.clip(xyah[0], 10, w_img - 10))
+                cy = int(np.clip(xyah[1], 10, h_img - 10))
+
                 vehicle_depth = float(depth_map[cy, cx])
-                if vehicle_depth < 0.1:
-                    vehicle_depth = 10.0  # fallback if depth is zero
+
+                # clamp depth to a range where EMAP's float64 math is stable.
+                # Depth Anything V2 outputs relative depth (unitless) which can
+                # be very small or very large. Values outside [0.5, 50] cause
+                # overflow in EMAP's coefficient calculations. The fallback 10.0
+                # is a neutral mid-range value that keeps ego-motion subtraction
+                # approximately correct for typical road scenes.
+                if not (0.5 <= vehicle_depth <= 50.0):
+                    vehicle_depth = 10.0
             else:
-                vehicle_depth = 10.0  # fallback if no depth map
+                vehicle_depth = 10.0
 
             control_signals.append([
                 self.current_yaw_dot,
@@ -250,14 +274,19 @@ class VehicleTracker:
 
         control_array = np.array(control_signals)
 
-        # run EMAP predict - this modifies mean in place to subtract camera motion
-        multi_mean, multi_cov = self.emap_kalman.multi_predict(
-            multi_mean, multi_cov, control_array
-        )
-
-        # store updated states back
-        for i, tid in enumerate(active_ids):
-            self.track_states[tid] = (multi_mean[i], multi_cov[i])
+        # run EMAP predict - subtracts camera motion from Kalman state
+        try:
+            multi_mean, multi_cov = self.emap_kalman.multi_predict(
+                multi_mean, multi_cov, control_array
+            )
+            # store updated states back
+            for i, tid in enumerate(active_ids):
+                self.track_states[tid] = (multi_mean[i], multi_cov[i])
+        except (RuntimeWarning, FloatingPointError, ValueError):
+            # if EMAP math still fails (e.g. degenerate covariance), skip
+            # this predict step - ByteTrack will still associate correctly,
+            # just without ego-motion compensation this frame
+            pass
 
     def update(self, model, frame, ego_H=None, depth_map=None):
         """
@@ -290,14 +319,14 @@ class VehicleTracker:
         VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
         tracked = []
-        track_ids_this_frame   = []
+        track_ids_this_frame = []
         bboxes_xyah_this_frame = []
 
         for box in results.boxes:
             if box.id is None:
                 continue
 
-            class_id   = int(box.cls[0])
+            class_id = int(box.cls[0])
             confidence = float(box.conf[0])
 
             if class_id not in VEHICLE_CLASSES:
@@ -329,9 +358,9 @@ class VehicleTracker:
 
             tracked.append({
                 "track_id": tid,
-                "type":     VEHICLE_CLASSES[class_id],
-                "bbox":     [x1, y1, x2, y2],
-                "center":   [cx, cy]
+                "type": VEHICLE_CLASSES[class_id],
+                "bbox": [x1, y1, x2, y2],
+                "center": [cx, cy]
             })
 
         # run EMAP predict step for all active tracks
@@ -343,16 +372,26 @@ class VehicleTracker:
                 depth_map
             )
 
-        # clean up state for tracks that disappeared
-        # if a track_id hasn't been seen for this frame, remove it
-        # to avoid the dict growing forever
+        # clean up state for tracks that disappeared.
+        # At 5Hz tracking, a vehicle missed for a frame or two is usually a
+        # brief occlusion, not a real disappearance - ByteTrack will re-find
+        # it with the same ID. So we keep the EMAP state alive for up to
+        # MISS_TOLERANCE consecutive missed frames before deleting it.
+        # Deleting immediately (the old behaviour) threw away the Kalman
+        # state on every brief occlusion and contributed to ID churn.
+        MISS_TOLERANCE = 10  # frames (= 2 seconds at 5Hz tracking)
+
         active_set = set(track_ids_this_frame)
-        gone_ids = [tid for tid in self.track_states if tid not in active_set]
-        for tid in gone_ids:
-            # keep lost tracks for up to 25 frames in case they reappear
-            # for simplicity here we remove immediately - ByteTrack handles
-            # the re-association logic internally anyway
-            del self.track_states[tid]
+        for tid in list(self.track_states.keys()):
+            if tid in active_set:
+                self.track_missed[tid] = 0
+            else:
+                self.track_missed[tid] = self.track_missed.get(tid, 0) + 1
+                if self.track_missed[tid] > MISS_TOLERANCE:
+                    del self.track_states[tid]
+                    del self.track_missed[tid]
 
         return tracked
+
+
 

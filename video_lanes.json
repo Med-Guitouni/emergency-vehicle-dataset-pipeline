@@ -1,11 +1,14 @@
 {
-  "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ": [
-    {
-      "from_second": 0,
-      "to_second": 930,
-      "lanes": 3,
-      "road_type": "highway",
-      "notes": "A2 Autobahn, 3 lanes, verified by visual inspection of pre-emergency frames"
-    }
-  ]
+  "20240720_\ud83d\udea8\ud83d\ude91Einsatzfahrt durch ": {
+    "emergency_start_second": 0,
+    "lanes": [
+      {
+        "from_second": 0,
+        "to_second": 930,
+        "lanes": 3,
+        "road_type": "highway",
+        "notes": "A2 Autobahn, 3 lanes, verified by visual inspection"
+      }
+    ]
+  }
 }

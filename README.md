@@ -3,12 +3,7 @@
 
 ---
 
-## What This Does
 
-Takes a dashcam video recorded from inside an
-ambulance during an emergency run and produces one JSON file per second, 
-capturing every surrounding vehicle's position, speed, behaviour, and spatial 
-relationships 
 
 ---
 
@@ -84,42 +79,117 @@ Output: `output/video_name/t0000.json … t0929.json`
 
 ```json
 {
-  "timestamp": 149,
-  "video_source": "video_name",
-  "emergency_active": true,
-  "emergency_triggered_by": ["siren"],
-  "scenario_type": "highway",
+  "timestamp":              ,   
+  "video_source":           ,   
+  "emergency_active":       ,   // true once emergency_start_second is reached (from video_lanes.json)
+  "scenario_type":          ,   // scene classifier output: highway / urban / intersection / roundabout
   "vehicles": [
     {
-      "id": 315,
-      "type": "car",
-      "x_meters": 4.75,
-      "y_meters": 24.3,
-      "speed_kmh": 3.2,
-      "forward_speed_ms": 0.8,
-      "lateral_speed_ms": -1.4,
-      "acceleration": -0.3,
-      "jerk": 0.1,
-      "heading_angle": 5.2,
-      "lane_id": 2,
-      "lateral_offset": 0.3,
-      "distance_to_ego": 24.7,
-      "lanes_total": 3,
-      "road_type": "highway",
-      "lane_source": "config",
-      "preceding_id": 287,
-      "following_id": 301,
-      "left_preceding_id": 412,
-      "left_following_id": null,
-      "right_preceding_id": null,
-      "right_following_id": 198,
-      "behaviour": "yielded",
-      "bbox": [259, 140, 382, 260]
+      "id":                 ,   //  ID assigned by ByteTrack 
+
+      "type":               ,   // car / truck / bus / motorcycle — from YOLO class
+
+      "x_meters":           ,   // lateral position in metres. + = right of ambulance centre, - = left.
+                                // derived from ground-plane pinhole projection (camera height + focal length)
+
+      "y_meters":           ,   // forward distance in metres from the ambulance.
+                             
+
+      "position_reliable":  ,   // false when the bounding box is clipped at a frame edge
+                                // (vehicle partially outside camera view — tyres not visible,
+                                // ground-plane projection unreliable). 
+
+      "speed_kmh":          ,   // overall speed magnitude in km/h — combines forward and lateral motion.
+                                // this is RELATIVE to the ambulance, not absolute ground speed.
+                                // if ambulance and vehicle travel at same speed, this reads ~0.
+                                // (Krajewski et al. 2018 — highD dataset)
+
+      "forward_speed_ms":   ,   // speed component ALONG the road in m/s.
+                                //positive moving away from ambulance.//negative  ambulance catching up.
+                                // different from speed_kmh which is the total magnitude regardless of direction.
+                                // a braking vehicle slows this value. a vehicle being overtaken has negative value.
+                                // (Krajewski et al. 2018 — highD dataset, longitudinal/lateral split)
+
+      "lateral_speed_ms":   ,   // speed component ACROSS the road in m/s.
+                                // + = moving right. - = moving left.
+                                // this is the direct yielding signal: a vehicle pulling aside
+                                // shows a clear lateral_speed_ms even when forward_speed_ms is near zero.
+                                // (Pierson et al. 2019 — highD analysis; Krajewski et al. 2018)
+
+      "acceleration":       ,   // change in speed_kmh per second, converted to m/s².
+                                // negative = decelerating (braking). large negative = hard brake.
+                                // threshold -2.5 m/s² used for braked_abruptly label.
+                                
+
+      "jerk":               ,   // change in acceleration per second (m/s³).
+                                // different from acceleration: acceleration tells you HOW FAST the vehicle
+                                // is changing speed; jerk tells you HOW SUDDENLY that change happened.
+                                // high jerk = panic stop (acceleration changed very abruptly).
+                                // low jerk = smooth braking even if deceleration is large.
+                                // (INTERACTION dataset — Zhan et al. 2019)
+
+      "lane_id":            , 
+
+      "lateral_offset":     ,   // distance from the centre of the vehicle's lane in metres.
+                                // + = right of lane centre. - = left of lane centre.
+                                // used in annotator Rule 3
+
+      "distance_to_ego":    ,   // straight-line distance to the ambulance in metres.
+                                // sqrt(x_meters² + y_meters²). used for proximity thresholds in annotator.
+
+      "lanes_total":        ,   // total number of lanes on this road at this timestamp.
+                                // manually annotated in video_lanes.json. 
+
+      "road_type":          ,   // highway / urban / intersection / roundabout.
+                                // from video_lanes.json (ground truth) or scene classifier fallback.
+
+      "lane_source":        ,   // "config" = from video_lanes.json (ground truth).
+                                // "scene_classifier" = automatic fallback (video not yet annotated).
+                                
+
+      "preceding_id":       ,   
+      "following_id":       ,   
+      "left_preceding_id":  ,   // all six computed from x_meters / y_meters. same-lane threshold = half lane width.
+      "left_following_id":   ,  // (Krajewski et al. 2018 — highD surrounding vehicle IDs)
+       "right_preceding_id"   
+        "right_following_id"
+         
+                                
+
+      "behaviour":          ,   // normal / yielded / braked_abruptly / failed_to_yield.
+                                // only assigned when emergency_active = true and vehicle within 50m.
+                                // rules based on Pierson et al. 2019, Qiu et al. 2025, braking literature.
+                                // see annotator.py for full rule documentation.
+
+      "bbox":               ,   // bounding box [x1, y1, x2, y2] in pixels of the cropped frame.
+                                // cropped frame = original with top 20% and bottom 15% removed.
     }
   ]
 }
 ```
 
+## Note for Validation Against other Datasets
+The pipeline was calibrated for one specific dashcam. Before validating the measured values against a dataset that
+has ground truth, several hard-coded assumptions must be re-calibrated to the new 
+camera (distributional shift) . The most important is the camera geometry in homography.py: 
+camera_height (currently 1.4m, the ambulance mount height) and focal_length_factor (currently 0.8 × frame width, an estimate)
+must be replaced with the real values of the validation dataset's camera.
+The horizon_ratio (currently 0.55) must also be re-measured for the new camera because
+it encodes the camera's pitch angle (point it at a frame from the new dataset and move the line until
+it sits on the true vanishing point of the road).Second, the spatial crop in preprocessor.py 
+(top 20%, bottom 15%) is tuned to where the ambulance dashboard and sky 
+sit in our frames; a different camera needs different crop fractions or the horizon
+geometry breaks. Third, the lane widths in lane_config.py (3.75m highway, 3.00m urban) follow 
+the German standard thats why a dataset recorded in another country needs its
+national lane-width values, since lane assignment and lateral offset depend on them.
+Fourth, the behaviour thresholds in annotator.py
+(lateral speed 0.5 m/s, heading 15°, braking −2.5 m/s²) were drawn from 
+highD German highway data; they are reasonable defaults but should be re-checked 
+if the validation dataset's driving context differs.
+Finally, all speeds remain relative to the ego vehicle: if the ground-truth dataset 
+reports absolute speeds, the ego vehicle's own speed must be added back before
+comparison.
+--fix the camera intrinsics and horizon, --confirm distance_to_ego matches ground-truth
 
 
 

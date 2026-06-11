@@ -4,7 +4,9 @@ import subprocess
 import os
 import cv2
 
-
+######################################################
+#        NOT USED ANYMORE
+######################################################
 class EmergencyDetector:
 
     SIREN_FREQ_LOW = 500

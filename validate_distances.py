@@ -1,31 +1,3 @@
-"""
-validate_distances.py
-
-Quick sanity check for the new ground-plane distance fix BEFORE running the
-whole pipeline. It processes a handful of frames and prints, for each detected
-vehicle, its forward distance (y_meters), lateral position (x_meters) and the
-bbox bottom row it was computed from.
-
-HOW TO READ THE OUTPUT
-----------------------
-Open the test video and pick a frame (the script saves annotated frames to
-validation_frames/ so you can look). For a vehicle you can judge:
-
-  - A car one or two car-lengths ahead should read roughly 7-15 m.
-  - A car far up the road near the horizon should read 80-150 m.
-  - Nothing should read 0.1-3 m any more (that was the old bug).
-
-GERMAN AUTOBAHN CALIBRATION TRICK
----------------------------------
-Lane dashes on the Autobahn are 6 m painted line + 12 m gap = 18 m period.
-Count dashes from the ambulance to a vehicle in the saved frame: N gaps ~ 18*N
-metres. Compare to the printed y_meters. If the code says d_measured but dashes
-say d_real, set focal_length_factor *= (d_real / d_measured) in
-HomographyEstimator and rerun. One good reference calibrates the whole dataset.
-
-If distances are uniformly too SMALL, raise horizon_ratio slightly (e.g. 0.46
--> 0.48). If uniformly too LARGE, lower it. horizon_ratio absorbs camera tilt.
-"""
 
 import os
 import cv2

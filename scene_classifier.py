@@ -12,6 +12,7 @@ class SceneClassifier:
     a new scenario is only accepted if the same prediction appears 3 times in a row.
     This prevents single noisy frames from flipping the scenario type while still
     detecting real transitions within 3 seconds.
+    (manual config always wins- takes over when manual was not done)
 
     """
 

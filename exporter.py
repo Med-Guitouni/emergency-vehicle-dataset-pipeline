@@ -22,7 +22,7 @@ class JSONExporter:
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
 
-    def save(self, timestamp, tracked_vehicles, video_name, emergency_active, triggered_by, scenario_type):
+    def save(self, timestamp, tracked_vehicles, video_name, emergency_active, scenario_type):
         video_dir = os.path.join(self.output_dir, video_name)
         os.makedirs(video_dir, exist_ok=True)
 
@@ -30,7 +30,6 @@ class JSONExporter:
             "timestamp": timestamp,
             "video_source": video_name,
             "emergency_active": emergency_active,
-            "emergency_triggered_by": triggered_by,
             "scenario_type": scenario_type,
             "vehicles": []
         }
@@ -41,6 +40,11 @@ class JSONExporter:
                 "type": v["type"],
                 "x_meters": v.get("x_meters", 0.0),
                 "y_meters": v.get("y_meters", 0.0),
+
+                # False when the bbox was clipped at a frame edge (tyres not
+                # visible -> ground-plane projection invalid) or the lateral
+                # plausibility clamp fired. Filter on this in the analysis.
+                "position_reliable": v.get("position_reliable", True),
                 "speed_kmh": v.get("speed_kmh", 0.0),
 
                 # split velocity in metres per second
@@ -51,7 +55,8 @@ class JSONExporter:
 
                 "acceleration": v.get("acceleration", 0.0),
                 "jerk": v.get("jerk", 0.0),
-                "heading_angle": v.get("heading_angle", 0.0),
+                # heading_angle intentionally not exported - computed internally
+                # for annotator rules only. Too noisy at 1Hz to be a dataset field.
                 "lane_id": v.get("lane_id", 0),
                 "lateral_offset": v.get("lateral_offset", 0.0),
                 "distance_to_ego": v.get("distance_to_ego", 0.0),
@@ -59,6 +64,7 @@ class JSONExporter:
                 # lane count and road type — "config" means manual annotation,
                 # "scene_classifier" means automatic fallback (video not in config)
                 "lanes_total": v.get("lanes_total", 2),
+
                 "road_type":   v.get("road_type", "unknown"),
                 "lane_source": v.get("lane_source", "unknown"),
 
@@ -87,6 +93,5 @@ class JSONExporter:
                 frame_data["vehicles"],
                 video_name,
                 frame_data["emergency_active"],
-                frame_data["emergency_triggered_by"],
                 frame_data["scenario_type"]
             )
