@@ -217,10 +217,7 @@ so the physics model dominates instead of the bad measurement.
 
 For analysis, filter on position_reliable: true before computing any spatial statistics. 
 The unreliable rows are kept in the dataset rather than deleted. 
-  ---------RUN count_reliability.py for stats ( here is ex output )------------
-=======================================================
-  POSITION RELIABILITY REPORT
-=======================================================
+->RUN count_reliability.py for stats ( here is ex output )
 
   Total observations : 3847
   Reliable           : 3315  (86.2%)
