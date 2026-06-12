@@ -2,13 +2,13 @@
 
 ### Detection and Tracking
 
-The first step is finding vehicles in each frame. **YOLO** (version 8 extra-large) is an object detection neural network that looks at each image and draws a bounding box around every vehicle it finds, classifying it as car, truck, bus, or motorcycle. It does this independently for each frame — it has no memory of what it saw one second ago.
+The first step is finding vehicles in each frame. **YOLO** (version 8 extra-large) is an object detection neural network that looks at each image and draws a bounding box around every vehicle it finds, classifying it as car, truck, bus, or motorcycle. It does this independently for each frame ,it has no memory of what it saw one second ago.
 
-Memory comes from **ByteTrack**, a tracking algorithm that takes YOLO's detections and links them across time. It does this by predicting where each vehicle should be in the next frame (using a Kalman Filter — a mathematical model that estimates future position from current position and velocity) and then matching that prediction to the closest actual detection using bounding box overlap (IoU — Intersection over Union, which measures how much two boxes overlap as a fraction of their combined area). When the overlap is high enough, ByteTrack decides it is the same vehicle and keeps the same ID number. This is what lets us say "truck 14 was here at second 30 and there at second 31" — without it, we would have a new unconnected list of anonymous boxes every second.
+Memory comes from **ByteTrack**, a tracking algorithm that takes YOLO's detections and links them across time. It does this by predicting where each vehicle should be in the next frame (using a Kalman Filter a mathematical model that estimates future position from current position and velocity) and then matching that prediction to the closest actual detection using bounding box overlap (IoU Intersection over Union, which measures how much two boxes overlap as a fraction of their combined area). When the overlap is high enough, ByteTrack decides it is the same vehicle and keeps the same ID number. This is what lets us say "truck 14 was here at second 30 and there at second 31"  without it, we would have a new unconnected list of anonymous boxes every second.
 
-**EMAP** (Ego-Motion Aware Prediction) runs alongside ByteTrack to handle a specific problem: because the ambulance itself is moving, every vehicle in the image appears to drift backward even if it is stationary. EMAP uses the ego homography (a matrix describing how the whole image shifted between two frames due to the camera's own movement) and a rough depth estimate from **Depth Anything V2** (a neural network that produces a per-pixel relative depth map — not in real metres, just a ranking of what is closer and what is further) to subtract the camera's motion from each vehicle's predicted position before ByteTrack tries to match it. This way, a parked car on the shoulder looks stationary to the tracker instead of appearing to fly backward.
+**EMAP** (Ego-Motion Aware Prediction) runs alongside ByteTrack to handle a specific problem: because the ambulance itself is moving, every vehicle in the image appears to drift backward even if it is stationary. EMAP uses the ego homography (a matrix describing how the whole image shifted between two frames due to the camera's own movement) and a rough depth estimate from **Depth Anything V2** (a neural network that produces a per-pixel relative depth map , not in real metres, just a ranking of what is closer and what is further) to subtract the camera's motion from each vehicle's predicted position before ByteTrack tries to match it. This way, a parked car on the shoulder looks stationary to the tracker instead of appearing to fly backward.
 
-The **scene classifier** is a ResNet18 (a convolutional neural network with 18 layers, no transformers) trained on the MIT Places365 dataset . It looks at each frame and guesses the scene type — highway, urban, intersection, or roundabout. This is used as a fallback for road type when a video has not been manually annotated, and it determines which lane width to use (highway lanes are wider than city lanes).
+The **scene classifier** is a ResNet18 (a convolutional neural network with 18 layers, no transformers) trained on the MIT Places365 dataset . It looks at each frame and guesses the scene type eg highway, urban, intersection, or roundabout. This is used as a fallback for road type when a video has not been manually annotated, and it determines which lane width to use (highway lanes are wider than city lanes).
 
 ### From Pixels to Real-World Position
 
@@ -32,7 +32,7 @@ x_lateral = (bottom_x - image_centre) × y_forward / focal_length
 Where `bottom_x` is the horizontal pixel position of the bottom-centre of the bounding box and `image_centre` is the middle column of the frame. This formula uses the forward distance we just computed: a vehicle that is 1 pixel to the right of centre at 10 metres is much closer laterally than a vehicle 1 pixel to the right at 50 metres.
 Multiplying the pixel offset by the forward distance and dividing by the focal length converts horizontal pixels to real lateral metres. Positive means the vehicle is to the right of the ambulance, negative means to the left.
 
-These two numbers — `x_meters` and `y_meters` — are the foundation. Every other metric in the pipeline is derived from them.
+These two numbers  `x_meters` and `y_meters`  are the foundation. Every other metric in the pipeline is derived from them.
 
 ### Velocity: Splitting Speed Into Forward and Sideways
 
@@ -46,7 +46,7 @@ forward_speed_ms = (y_now - y_previous) / dt
 ```
 
 Positive means the vehicle is moving away from the ambulance (the gap is growing); negative means the ambulance is catching up (the gap is shrinking).
-This is always relative to the ambulance — if both are travelling at the same real speed, forward_speed_ms reads approximately zero.
+This is always relative to the ambulance , if both are travelling at the same real speed, forward_speed_ms reads approximately zero.
 
 **Lateral speed** (movement across the road):
 
@@ -55,7 +55,7 @@ lateral_speed_ms = (x_now - x_previous) / dt
 ```
 
 Positive means moving right, negative means moving left. This is the most direct signal for yielding: a vehicle pulling onto the right shoulder shows a clear positive lateral speed even when its forward speed is near zero.
-This is why the primary yielding rule uses lateral speed — it captures the exact motion that defines yielding.
+This is why the primary yielding rule uses lateral speed ; it captures the exact motion that defines yielding.
 
 **Overall speed** (combined magnitude):
 
@@ -64,7 +64,7 @@ speed_kmh = sqrt(forward² + lateral²) × 3.6
 ```
 
 The square root combines both components into a single total speed, and multiplying by 3.6 converts from metres per second to kilometres per hour. 
-This number tells you how fast the vehicle is moving overall but not in which direction — 
+This number tells you how fast the vehicle is moving overall but not in which direction - 
 the split components above are more informative for behaviour analysis.
 
 ### Acceleration and Jerk
@@ -115,7 +115,7 @@ Before any velocity, acceleration, or jerk is computed, the raw positions are cl
 
 A regular Kalman Filter only looks at the past as it processes each frame. The RTS smoother adds a second, backward pass over the entire finished trajectory: each position estimate is corrected using not only what came before it but also what came after it. The result is the smoothest possible trajectory that still fits all the observations. This is the same post-processing step that the highD and INTERACTION reference traffic datasets apply before publishing.
 
-The smoother is also reliability-aware: measurements that came from clipped bounding boxes (flagged as `position_reliable = false`) are given 25 times more measurement noise in the filter, so the physics model (which assumes roughly constant velocity) dominates over the bad measurement. This is what tames trucks driving right beside the ambulance whose bounding boxes are cut off at the frame edge — their raw positions can jump ±3 metres per frame, but the smoother recognises those as unreliable and produces a smooth, physically plausible trajectory instead.
+The smoother is also reliability-aware: measurements that came from clipped bounding boxes (flagged as `position_reliable = false`) are given 25 times more measurement noise in the filter, so the physics model (which assumes roughly constant velocity) dominates over the bad measurement. This is what tames trucks driving right beside the ambulance whose bounding boxes are cut off at the frame edge , their raw positions can jump ±3 metres per frame, but the smoother recognises those as unreliable and produces a smooth, physically plausible trajectory instead.
 
 ###  Bird's Eye View
 
