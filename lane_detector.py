@@ -8,27 +8,11 @@ class LaneDetector:
     # not used by anything. It exists purely as documentation of what was attempted
     # (UFLD v2, YOLOP, both failed) and as a placeholder
     """
-ROAD BOUNDARY DETECTION - INCOMPLETE - NEEDS WORK
-
-What I tried:
-I attempted to detect road boundaries (driving lanes + shoulders) to identify
-when a vehicle has moved off the road to make space for the ambulance.
-
-Approach 1 - UFLD v2 (Ultra Fast Lane Detection):
-I used a pretrained ONNX model to detect lane line positions as pixel coordinates.
-Model file: models/ufldv2_tusimple_res18_320x800.onnx
-Problem: when vehicles sit on the shoulder they physically cover the lane markings.
-The model detects the vehicle as the boundary instead of the actual painted line.
-Result: boundaries shift when vehicles yield, making it useless for detecting yielding.
-
-Approach 2 - YOLOP :
-I switched to YOLOP which segments the full drivable area and lane lines as pixel masks.
-Model file: models/yolop-640-640.onnx
-The lane line segmentation (output[2]) worked better than UFLD in occluded frames.
-Problem 1: the drivable area mask (output[1]) incorrectly includes the shoulder in green.
-Problem 2: lane line detection still shifts when vehicles are on the shoulder because
-the vehicles themselves are detected as visual boundaries.
-Result: same fundamental failure as UFLD - boundaries are not static.
+UFLD v2, YOLOP and both fail exactly when it matters —
+when vehicles cover the lane markings during yielding. Semantic segmentation
+alternatives (SegFormer, HDMapNet, STSU) need calibrated cameras we don't have.
+ Manual annotation in video_lanes.json is the honest approach
+ might revisit with CLRNet/CondLaneNet later BUT not now
 
 
 """
