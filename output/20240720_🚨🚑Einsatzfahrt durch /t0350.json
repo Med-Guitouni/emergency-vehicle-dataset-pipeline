@@ -10,7 +10,7 @@
       "x_meters": 2.0,
       "y_meters": 12.13,
       "position_reliable": true,
-      "speed_kmh": 0.63,
+      "speed_kmh": 0.62,
       "forward_speed_ms": -0.14,
       "lateral_speed_ms": 0.1,
       "acceleration": 0.355,

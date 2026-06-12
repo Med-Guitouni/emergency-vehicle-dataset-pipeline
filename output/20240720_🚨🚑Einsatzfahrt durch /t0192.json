@@ -7,7 +7,7 @@
     {
       "id": 637,
       "type": "car",
-      "x_meters": -1.76,
+      "x_meters": -1.73,
       "y_meters": 30.89,
       "position_reliable": true,
       "speed_kmh": 0.0,
@@ -38,7 +38,7 @@
     {
       "id": 554,
       "type": "car",
-      "x_meters": 1.64,
+      "x_meters": 1.65,
       "y_meters": 12.33,
       "position_reliable": true,
       "speed_kmh": 1.24,
@@ -69,10 +69,10 @@
     {
       "id": 313,
       "type": "truck",
-      "x_meters": 0.96,
+      "x_meters": 0.97,
       "y_meters": 20.54,
       "position_reliable": true,
-      "speed_kmh": 0.25,
+      "speed_kmh": 0.24,
       "forward_speed_ms": 0.01,
       "lateral_speed_ms": -0.07,
       "acceleration": -0.2,
@@ -100,7 +100,7 @@
     {
       "id": 192,
       "type": "car",
-      "x_meters": -2.43,
+      "x_meters": -2.42,
       "y_meters": 7.98,
       "position_reliable": true,
       "speed_kmh": 0.79,
@@ -131,7 +131,7 @@
     {
       "id": 599,
       "type": "car",
-      "x_meters": -2.37,
+      "x_meters": -2.35,
       "y_meters": 19.66,
       "position_reliable": true,
       "speed_kmh": 4.07,

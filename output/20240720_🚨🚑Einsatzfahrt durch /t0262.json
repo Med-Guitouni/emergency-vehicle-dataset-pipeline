@@ -7,12 +7,12 @@
     {
       "id": 366,
       "type": "truck",
-      "x_meters": 1.08,
+      "x_meters": 1.1,
       "y_meters": 13.7,
       "position_reliable": true,
       "speed_kmh": 1.42,
       "forward_speed_ms": -0.39,
-      "lateral_speed_ms": 0.05,
+      "lateral_speed_ms": 0.06,
       "acceleration": 0.58,
       "jerk": 0.108,
       "lane_id": 2,
@@ -38,7 +38,7 @@
     {
       "id": 841,
       "type": "car",
-      "x_meters": -2.26,
+      "x_meters": -2.25,
       "y_meters": 24.45,
       "position_reliable": true,
       "speed_kmh": 1.99,

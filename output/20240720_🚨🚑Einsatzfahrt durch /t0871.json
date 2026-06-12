@@ -7,7 +7,7 @@
     {
       "id": 1825,
       "type": "truck",
-      "x_meters": 3.8,
+      "x_meters": 3.82,
       "y_meters": 20.87,
       "position_reliable": true,
       "speed_kmh": 1.69,
@@ -17,7 +17,7 @@
       "jerk": -0.039,
       "lane_id": 2,
       "lateral_offset": 1.69,
-      "distance_to_ego": 21.21,
+      "distance_to_ego": 21.22,
       "lanes_total": 3,
       "road_type": "highway",
       "lane_source": "config",
@@ -38,7 +38,7 @@
     {
       "id": 2165,
       "type": "truck",
-      "x_meters": 1.46,
+      "x_meters": 1.47,
       "y_meters": 31.65,
       "position_reliable": true,
       "speed_kmh": 2.12,

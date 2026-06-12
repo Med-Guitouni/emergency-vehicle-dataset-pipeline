@@ -38,7 +38,7 @@
     {
       "id": 1924,
       "type": "bus",
-      "x_meters": 4.83,
+      "x_meters": 4.84,
       "y_meters": 17.57,
       "position_reliable": true,
       "speed_kmh": 2.32,
@@ -69,7 +69,7 @@
     {
       "id": 1982,
       "type": "truck",
-      "x_meters": 1.22,
+      "x_meters": 1.25,
       "y_meters": 25.92,
       "position_reliable": true,
       "speed_kmh": 0.52,

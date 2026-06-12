@@ -7,7 +7,7 @@
     {
       "id": 548,
       "type": "car",
-      "x_meters": 1.31,
+      "x_meters": 1.33,
       "y_meters": 19.22,
       "position_reliable": true,
       "speed_kmh": 0.0,
@@ -17,7 +17,7 @@
       "jerk": 0.0,
       "lane_id": 2,
       "lateral_offset": 0.62,
-      "distance_to_ego": 19.26,
+      "distance_to_ego": 19.27,
       "lanes_total": 3,
       "road_type": "highway",
       "lane_source": "config",
@@ -69,7 +69,7 @@
     {
       "id": 247,
       "type": "car",
-      "x_meters": -2.1,
+      "x_meters": -2.08,
       "y_meters": 30.48,
       "position_reliable": true,
       "speed_kmh": 1.99,
@@ -100,7 +100,7 @@
     {
       "id": 410,
       "type": "truck",
-      "x_meters": 0.83,
+      "x_meters": 0.84,
       "y_meters": 24.28,
       "position_reliable": true,
       "speed_kmh": 2.6,

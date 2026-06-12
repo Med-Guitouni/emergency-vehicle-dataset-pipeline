@@ -7,10 +7,10 @@
     {
       "id": 1825,
       "type": "bus",
-      "x_meters": 1.13,
+      "x_meters": 1.14,
       "y_meters": 23.34,
       "position_reliable": true,
-      "speed_kmh": 0.2,
+      "speed_kmh": 0.19,
       "forward_speed_ms": -0.04,
       "lateral_speed_ms": 0.04,
       "acceleration": -0.077,
@@ -27,7 +27,7 @@
       "left_following_id": null,
       "right_preceding_id": null,
       "right_following_id": null,
-      "behaviour": "normal",
+      "behaviour": "yielded",
       "bbox": [
         327,
         127,

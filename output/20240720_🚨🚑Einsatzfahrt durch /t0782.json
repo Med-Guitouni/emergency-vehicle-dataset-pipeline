@@ -7,7 +7,7 @@
     {
       "id": 1886,
       "type": "car",
-      "x_meters": -8.46,
+      "x_meters": -8.42,
       "y_meters": 41.29,
       "position_reliable": true,
       "speed_kmh": 3.43,
@@ -17,7 +17,7 @@
       "jerk": -0.007,
       "lane_id": 2,
       "lateral_offset": -1.85,
-      "distance_to_ego": 42.15,
+      "distance_to_ego": 42.14,
       "lanes_total": 3,
       "road_type": "highway",
       "lane_source": "config",

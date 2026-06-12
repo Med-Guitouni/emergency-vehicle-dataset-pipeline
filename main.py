@@ -81,13 +81,15 @@ def process_video(video_path):
         vehicles_raw = []
         for v in tracked:
             bbox = v["bbox"]
-            bottom_center = [(bbox[0] + bbox[2]) // 2, bbox[3]]
 
-            x_raw, y_raw = h.get_bev_position(
-                bottom_center, frame_width, frame_height, lane_info
-            )
-            reliable = h.is_position_reliable(
-                bbox, frame_width, frame_height, x_raw, lane_info
+            # position + reliability in one edge-aware call:
+            # top-clipped boxes are valid (projection uses only the bottom
+            # row), side-clipped boxes get their lateral reconstructed from
+            # the visible edge + a class width prior, only bottom-clipped /
+            # fully-spanning boxes stay unreliable. See homography.py
+            # get_vehicle_position docstring for the literature.
+            x_raw, y_raw, reliable = h.get_vehicle_position(
+                bbox, v["type"], frame_width, frame_height, lane_info
             )
 
             vehicles_raw.append({

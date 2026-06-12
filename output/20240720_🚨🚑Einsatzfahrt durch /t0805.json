@@ -7,7 +7,7 @@
     {
       "id": 1982,
       "type": "truck",
-      "x_meters": 1.48,
+      "x_meters": 1.5,
       "y_meters": 20.69,
       "position_reliable": true,
       "speed_kmh": 5.29,
@@ -38,7 +38,7 @@
     {
       "id": 1854,
       "type": "car",
-      "x_meters": -1.96,
+      "x_meters": -1.93,
       "y_meters": 25.75,
       "position_reliable": true,
       "speed_kmh": 0.37,
@@ -100,7 +100,7 @@
     {
       "id": 1888,
       "type": "car",
-      "x_meters": 2.32,
+      "x_meters": 2.33,
       "y_meters": 10.42,
       "position_reliable": true,
       "speed_kmh": 7.45,

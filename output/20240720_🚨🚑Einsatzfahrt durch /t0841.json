@@ -7,7 +7,7 @@
     {
       "id": 2037,
       "type": "car",
-      "x_meters": -2.76,
+      "x_meters": -2.73,
       "y_meters": 33.63,
       "position_reliable": true,
       "speed_kmh": 4.54,
@@ -38,7 +38,7 @@
     {
       "id": 2050,
       "type": "car",
-      "x_meters": 1.43,
+      "x_meters": 1.45,
       "y_meters": 16.79,
       "position_reliable": true,
       "speed_kmh": 8.03,

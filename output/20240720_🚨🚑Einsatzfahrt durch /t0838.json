@@ -7,7 +7,7 @@
     {
       "id": 2083,
       "type": "car",
-      "x_meters": -2.16,
+      "x_meters": -2.15,
       "y_meters": 28.02,
       "position_reliable": true,
       "speed_kmh": 2.82,
@@ -38,12 +38,12 @@
     {
       "id": 1825,
       "type": "bus",
-      "x_meters": 0.86,
+      "x_meters": 0.88,
       "y_meters": 23.61,
       "position_reliable": true,
       "speed_kmh": 1.79,
       "forward_speed_ms": 0.5,
-      "lateral_speed_ms": 0.04,
+      "lateral_speed_ms": 0.05,
       "acceleration": 0.393,
       "jerk": -0.017,
       "lane_id": 2,

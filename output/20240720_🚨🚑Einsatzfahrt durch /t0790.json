@@ -38,7 +38,7 @@
     {
       "id": 1482,
       "type": "truck",
-      "x_meters": 0.05,
+      "x_meters": 0.08,
       "y_meters": 26.33,
       "position_reliable": true,
       "speed_kmh": 2.97,
