@@ -24,15 +24,15 @@ from emergency_detector import EmergencyDetector
 from surrounding import SurroundingVehicles
 
 # ---- config ----
-N_FRAMES      = 50      # how many frames to save
-OUTPUT_DIR    = "validation_frames"
+N_FRAMES = 50  # how many frames to save
+OUTPUT_DIR = "validation_frames"
 
 # colour per behaviour label
 COLOURS = {
-    "normal":          (180, 180, 180),   # grey
-    "yielded":         (0,   220, 0),     # green
-    "braked_abruptly": (0,   140, 255),   # orange
-    "failed_to_yield": (0,   0,   255),   # red
+    "normal": (180, 180, 180),  # grey
+    "yielded": (0, 220, 0),  # green
+    "braked_abruptly": (0, 140, 255),  # orange
+    "failed_to_yield": (0, 0, 255),  # red
 }
 UNKNOWN_COLOUR = (200, 200, 0)
 
@@ -53,17 +53,17 @@ if os.path.exists(OUTPUT_DIR):
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ---- load pipeline components ----
-p  = VideoPreprocessor(video_path)
-d  = VehicleDetector()
-t  = VehicleTracker()
-h  = HomographyEstimator()
-a  = HeuristicAnnotator()
+p = VideoPreprocessor(video_path)
+d = VehicleDetector()
+t = VehicleTracker()
+h = HomographyEstimator()
+a = HeuristicAnnotator()
 ed = EmergencyDetector(video_path)
 sv = SurroundingVehicles()
 lc = LaneConfig()
 
 frames = p.extract_frames(fps=1)
-total  = len(frames)
+total = len(frames)
 
 sample_frames = [frames[i]["frame"] for i in range(min(10, total))]
 ed.daytime = ed.detect_daytime(sample_frames)
@@ -79,8 +79,8 @@ prev_vehicles = []
 # but only SAVE the ones at the chosen indices
 for idx, item in enumerate(frames):
     timestamp = item["timestamp"]
-    frame     = p.spatial_crop(item["frame"])
-    fh, fw    = frame.shape[:2]
+    frame = p.spatial_crop(item["frame"])
+    fh, fw = frame.shape[:2]
 
     ego_H, depth_map = h.process_frame(frame)
     tracked = t.update(d.model, frame, ego_H=ego_H, depth_map=depth_map)
@@ -90,21 +90,20 @@ for idx, item in enumerate(frames):
     )
 
     lane_info = lc.get_lane_info(video_name, timestamp)
-    vehicles  = []
+    vehicles = []
 
     for v in tracked:
-        tid    = v["track_id"]
+        tid = v["track_id"]
         center = v["center"]
-        bbox   = v["bbox"]
-        bottom_center = [(bbox[0] + bbox[2]) // 2, bbox[3]]
-
-        x_m, y_m = h.get_bev_position(bottom_center, fw, fh)
+        bbox = v["bbox"]
+        # edge-aware position (matches main.py - see homography.py docstring)
+        x_m, y_m, reliable = h.get_vehicle_position(bbox, v["type"], fw, fh, lane_info)
         fwd, lat, spd = h.estimate_relative_velocity(tid, x_m, y_m)
-        acc  = h.estimate_acceleration(tid, spd)
-        jrk  = h.estimate_jerk(tid, acc)
-        hdg  = h.estimate_heading(tid, x_m, y_m)
+        acc = h.estimate_acceleration(tid, spd)
+        jrk = h.estimate_jerk(tid, acc)
+        hdg = h.estimate_heading(tid, x_m, y_m)
         dist = h.estimate_distance_to_ego(x_m, y_m)
-        lid  = h.estimate_lane_id(center[0], fw, lane_info)
+        lid = h.estimate_lane_id(center[0], fw, lane_info)
         loff = h.estimate_lateral_offset(center[0], fw, lane_info)
 
         vdata = {
@@ -142,8 +141,8 @@ for idx, item in enumerate(frames):
 
         for v in vehicles:
             bbox = v["bbox"]
-            beh  = v["behaviour"]
-            col  = COLOURS.get(beh, UNKNOWN_COLOUR)
+            beh = v["behaviour"]
+            col = COLOURS.get(beh, UNKNOWN_COLOUR)
 
             # bounding box
             cv2.rectangle(vis, (bbox[0], bbox[1]), (bbox[2], bbox[3]), col, 2)
@@ -178,3 +177,4 @@ saved = len(indices)
 print(f"\nDone. {saved} frames saved to {OUTPUT_DIR}/")
 print("Colour key: GREY=normal  GREEN=yielded  ORANGE=braked_abruptly  RED=failed_to_yield")
 print("Yellow line = assumed horizon (ground-plane geometry anchor)")
+

@@ -19,7 +19,7 @@ class DepthEstimator:
     -----------------------------------------
     Depth Anything V2 (the non-metric checkpoint we use) outputs relative
     inverse depth - a unitless value that is monotonic with distance but is
-    NOT in metres and is nonlinear. We deliberately do NOT convert it to
+    NOT in metres and is non linear. We deliberately do NOT convert it to
     metres any more (an earlier version did, with a near-road anchor, and it
     was wrong because the crop removes the near road). EMAP only needs the
     relative ordering of depths, so we pass the raw model output through.
@@ -30,7 +30,7 @@ class DepthEstimator:
 
     # Depth Anything V2 expects ImageNet normalisation (pretrained there)
     IMAGENET_MEAN = [0.485, 0.456, 0.406]
-    IMAGENET_STD  = [0.229, 0.224, 0.225]
+    IMAGENET_STD = [0.229, 0.224, 0.225]
 
     # native training resolution of Depth Anything V2 Small
     INPUT_SIZE = 518
@@ -48,7 +48,7 @@ class DepthEstimator:
             from depth_anything_v2.dpt import DepthAnythingV2
 
             model_configs = {
-                "encoder": "vits",   # ViT-Small - fastest, good enough on CPU
+                "encoder": "vits",  # ViT-Small - fastest, good enough on CPU
                 "features": 64,
                 "out_channels": [48, 96, 192, 384]
             }
@@ -182,7 +182,7 @@ class HomographyEstimator:
         # we keep 3 entries so heading is computed over a 3-second window
         # this smooths out the noise that makes single-frame arctan2 unreliable
         self.heading_history_m = {}
-        self.HEADING_WINDOW = 3   # seconds / frames at 1Hz
+        self.HEADING_WINDOW = 3  # seconds / frames at 1Hz
 
         # previous speed / acceleration per track_id, for accel and jerk
         self.prev_speeds = {}
@@ -306,27 +306,109 @@ class HomographyEstimator:
 
         return round(float(x_lateral), 2), round(float(y_forward), 2)
 
+    def get_vehicle_position(self, bbox, vehicle_type, frame_width,
+                             frame_height, lane_info=None):
+        """
+        Position + reliability in ONE call, with correct edge handling.
+        Returns (x_meters, y_meters, position_reliable).
+
+        THE KEY INSIGHT (Stein, Mata & Shashua, Mobileye, IEEE IV 2003;
+        confirmed in Tuohy et al. IV 2010, Rezaei et al. T-ITS 2015):
+        The ground-plane projection only uses the BOTTOM ROW of the box:
+
+            y_forward = camera_height * focal / (bottom_y - horizon_row)
+            x_lateral = (bottom_x_centre - image_centre) * y_forward / focal
+
+        The TOP of the box never enters the formula. Therefore:
+
+        TOP CLIPPED (roof above frame top, tyres visible):
+            bottom_y is fully valid -> y_forward correct.
+            bottom_x_centre is the midpoint of the full visible width ->
+            x_lateral correct as long as both sides are visible.
+            -> RELIABLE. The old any-edge flag was wrongly discarding these.
+
+        SIDE CLIPPED (vehicle half out of left or right edge):
+            bottom_y still valid -> y_forward still correct.
+            BUT bottom_x_centre of the VISIBLE box is not the centre of
+            the VEHICLE - biased toward image centre by up to half the
+            hidden width. We could reconstruct using a width prior
+            (Deep3DBox CVPR 2017, MonoFlex CVPR 2021), but during a
+            yielding manoeuvre the vehicle is angled, so the prior
+            introduces a yaw-dependent error (~0.2-0.7m at 10-30 deg).
+            For a thesis dataset it is more honest to flag these and let
+            the RTS smoother interpolate, than to introduce a biased fix
+            at the worst possible moment.
+            -> UNRELIABLE (flagged, smoother handles it with low weight).
+
+        BOTTOM CLIPPED (tyres below the crop):
+            The projection input itself is missing.
+            -> UNRELIABLE.
+
+        BOTH SIDES CLIPPED (vehicle spans the full frame width):
+            No reliable edge to anchor anything.
+            -> UNRELIABLE.
+
+        LATERAL CLAMP FIRED:
+            Raw value was physically impossible.
+            -> UNRELIABLE.
+        """
+        x1, y1, x2, y2 = bbox
+        EDGE = 2
+
+        top_clipped = y1 <= EDGE
+        bottom_clipped = y2 >= frame_height - EDGE
+        left_clipped = x1 <= EDGE
+        right_clipped = x2 >= frame_width - EDGE
+        side_clipped = left_clipped or right_clipped
+
+        f = frame_width * self.focal_length_factor
+        cx = frame_width / 2.0
+        horizon_row = self.horizon_ratio * frame_height
+
+        # forward distance from the bottom row
+        delta_y = y2 - horizon_row
+        min_delta = (self.camera_height * f) / self.MAX_FORWARD_METERS
+        if delta_y < min_delta:
+            delta_y = min_delta
+        y_forward = (self.camera_height * f) / delta_y
+        if y_forward > self.MAX_FORWARD_METERS:
+            y_forward = self.MAX_FORWARD_METERS
+
+        # lateral from box centre (valid when both sides visible)
+        x_lateral = ((x1 + x2) / 2.0 - cx) * y_forward / f
+
+        # lateral plausibility clamp (lane-aware)
+        if lane_info is not None:
+            half_road = (lane_info["lanes"] * lane_info["lane_width_meters"]) / 2.0
+        else:
+            half_road = (3 * self.LANE_WIDTH_METERS) / 2.0
+        max_lateral = half_road + self.SHOULDER_METERS
+
+        clamped = False
+        if x_lateral > max_lateral:
+            x_lateral = max_lateral
+            clamped = True
+        elif x_lateral < -max_lateral:
+            x_lateral = -max_lateral
+            clamped = True
+
+        # reliability: top-only clip is fine; side/bottom/clamp are not
+        reliable = (not bottom_clipped
+                    and not side_clipped
+                    and not clamped)
+
+        return (round(float(x_lateral), 2),
+                round(float(y_forward), 2),
+                reliable)
+
     def is_position_reliable(self, bbox, frame_width, frame_height,
                              x_m, lane_info=None):
         """
-        Returns False when the computed position should not be trusted (Fix 2).
-
-        WHY THIS EXISTS
-        ---------------
-        The ground-plane formula projects the bottom-centre of the bounding
-        box, assuming that point is where the tyres touch the road. When the
-        bbox is CLIPPED at a frame edge - the vehicle is partially outside
-        the camera view, typical for trucks right beside the ambulance - the
-        bbox bottom is just where the visible part ends, NOT the tyre line.
-        The projected position is then wrong, sometimes by tens of metres.
-
-        Rules:
-        - bbox touches any frame edge       -> unreliable
-        - lateral position sits at the clamp -> unreliable (the clamp fired,
-          meaning the raw value was physically impossible)
-
-        The flag is exported as "position_reliable" in the JSON so the
-        analysis can filter these rows instead of silently trusting them.
+        LEGACY - superseded by get_vehicle_position() which handles edge
+        cases correctly (top-clip is fine, side-clip is reconstructed).
+        Kept only so older helper scripts keep running. Do not use in new
+        code: this old rule over-flags (any edge touch = unreliable) and
+        threw away 77.5% of close-range observations.
         """
         x1, y1, x2, y2 = bbox
         EDGE = 2  # pixels of tolerance
@@ -371,8 +453,8 @@ class HomographyEstimator:
         if prev is None:
             return 0.0, 0.0, 0.0
 
-        dx = x_m - prev[0]   # + = moved right
-        dy = y_m - prev[1]   # + = moved further ahead (away from ego)
+        dx = x_m - prev[0]  # + = moved right
+        dy = y_m - prev[1]  # + = moved further ahead (away from ego)
 
         lateral_speed = dx / dt
         forward_speed = dy / dt

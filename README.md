@@ -190,6 +190,55 @@ Finally, all speeds remain relative to the ego vehicle: if the ground-truth data
 reports absolute speeds, the ego vehicle's own speed must be added back before
 comparison.
 --fix the camera intrinsics and horizon, --confirm distance_to_ego matches ground-truth
+## ## Position Reliability
+
+Every vehicle observation in the JSON includes a `position_reliable` field (true or false).
+This flag tells the analysis whether the ground-plane position (`x_meters`, `y_meters`) for that vehicle at that second can be trusted.
+The position is computed by projecting the bottom of the YOLO bounding box onto the road plane using camera geometry. This works correctly as long as the vehicle's tyres are visible in the frame
+ the formula only uses the bottom row of the box, so a vehicle whose roof is cut off at the top of the frame is still measured correctly. 
+However, three cases break the assumption: the vehicle's bottom edge is cut off by the crop (tyres not visible), 
+the vehicle's sides are clipped (the lateral centre of the visible box is not the centre of the vehicle), 
+or the computed lateral position exceeds the physical road boundary and the safety clamp fires. 
+All three are flagged `position_reliable: false`.
+
+The dominant cause in this dataset is large trucks driving directly beside the ambulance during the emergency run 
+at 5–10m distance a truck fills most of the camera frame and its sides clip the edges. 
+This is a physical constraint of a single fixed camera.
+
+On the test video (930 seconds, 3847 total vehicle-frame observations),
+the initial implementation flagged 26.3% of observations as unreliable,
+with 77.5% of close-range (0–10m) observations affected. 
+After correcting an over-strict rule that was wrongly penalising top-clipped boxes
+(whose roof is out of frame but whose tyres are fully visible and whose position
+formula is unaffected), the rate dropped to 13.8% overall and 39.3% at 0–10m.
+The remaining unreliable observations are genuinely problematic measurements 
+the RTS smoother already handles them by assigning them 25× lower measurement weight
+so the physics model dominates instead of the bad measurement.
+
+For analysis, filter on `position_reliable: true` before computing any spatial statistics. 
+The unreliable rows are kept in the dataset rather than deleted. 
+  ---------RUN count_reliability.py for stats ( here is ex output )------------
+=======================================================
+  POSITION RELIABILITY REPORT
+=======================================================
+
+  Total observations : 3847
+  Reliable           : 3315  (86.2%)
+  Unreliable         : 532  (13.8%)
+
+  Summary: 532/3847 observations flagged unreliable
+
+--- By vehicle type ---
+  bus             16/101    ( 15.8%)  ███
+  car            121/1581   (  7.7%)  █
+  truck          395/2165   ( 18.2%)  ███
+
+--- By distance to ego ---
+  0-10m   (very close)    456/1159   ( 39.3%)  ███████
+  10-20m  (close)          66/1175   (  5.6%)  █
+  20-40m  (mid)            10/1494   (  0.7%)  
+  40-80m  (far)             0/19     (  0.0%)  
+  80m+    (distant)         0/0      (  0.0%)  
 
 
 
