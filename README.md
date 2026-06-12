@@ -190,16 +190,16 @@ Finally, all speeds remain relative to the ego vehicle: if the ground-truth data
 reports absolute speeds, the ego vehicle's own speed must be added back before
 comparison.
 --fix the camera intrinsics and horizon, --confirm distance_to_ego matches ground-truth
-## ## Position Reliability
+## Position Reliability
 
 Every vehicle observation in the JSON includes a `position_reliable` field (true or false).
-This flag tells the analysis whether the ground-plane position (`x_meters`, `y_meters`) for that vehicle at that second can be trusted.
+This flag tells the analysis whether the ground-plane position (x,y) for that vehicle at that second can be trusted.
 The position is computed by projecting the bottom of the YOLO bounding box onto the road plane using camera geometry. This works correctly as long as the vehicle's tyres are visible in the frame
  the formula only uses the bottom row of the box, so a vehicle whose roof is cut off at the top of the frame is still measured correctly. 
 However, three cases break the assumption: the vehicle's bottom edge is cut off by the crop (tyres not visible), 
 the vehicle's sides are clipped (the lateral centre of the visible box is not the centre of the vehicle), 
 or the computed lateral position exceeds the physical road boundary and the safety clamp fires. 
-All three are flagged `position_reliable: false`.
+All three are flagged position_reliable: false.
 
 The dominant cause in this dataset is large trucks driving directly beside the ambulance during the emergency run 
 at 5–10m distance a truck fills most of the camera frame and its sides clip the edges. 
@@ -215,7 +215,7 @@ The remaining unreliable observations are genuinely problematic measurements
 the RTS smoother already handles them by assigning them 25× lower measurement weight
 so the physics model dominates instead of the bad measurement.
 
-For analysis, filter on `position_reliable: true` before computing any spatial statistics. 
+For analysis, filter on position_reliable: true before computing any spatial statistics. 
 The unreliable rows are kept in the dataset rather than deleted. 
   ---------RUN count_reliability.py for stats ( here is ex output )------------
 =======================================================
