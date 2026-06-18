@@ -1,5 +1,5 @@
 #  Pipeline Emergency Vehicle Behaviour Dataset 
-not updated 
+not fully  updated 
 ### 
 
 ---
@@ -58,7 +58,7 @@ Output: `output/video_name/t0000.json … t0929.json`
 ---
 
 ## Pipeline
-
+Only these classes are relevant ; others found are either just documentation of what was tried or tests
 | File                    |  | What it does                                                            |
 |-------------------------|--|-------------------------------------------------------------------------|
 | `downloader.py`         |  | Downloads videos via yt-dlp                                             |
@@ -66,13 +66,11 @@ Output: `output/video_name/t0000.json … t0929.json`
 | `detector.py`           |  | YOLOv8x detects cars, trucks, buses, motorcycles (conf ≥ 0.25)          |
 | `tracker.py`            |  | ByteTrack + EMAP-enhanced Kalman Filter for stable IDs                  |
 | `homography.py`         |  | Ground-plane pinhole projection → real-world metres, split velocity, ego motion |
-| `annotator.py`          |  | Labels vehicle behaviour per frame (5 rules, literature-backed)         |
-| `emergency_detector.py` |  | FFT siren detection + blue light (night only), latches once confirmed   |
+| `annotator.py`          |  | Labels vehicle behaviour per frame (5 rules, literature-backed)         | |
 | `scene_classifier.py`   |  | MIT Places365 ResNet18 → highway / urban / intersection / roundabout    |
 | `lane_config.py`        |  | Manual ground-truth lane count per video (see `video_lanes.json`)       |
 | `surrounding.py`        |  | highD-style 6-neighbour IDs from metric positions                       |
 | `exporter.py`           |  | Writes one JSON per second per video                                    |
-| `lane_detector.py`      |  | UFLD v2 + YOLOP attempted, both fail under occlusion.   |
 
 ---
 
