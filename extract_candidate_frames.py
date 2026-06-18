@@ -1,9 +1,8 @@
 """
 extract_candidate_frames.py
 
-
+NOT RELEVANT WAS USED FOR TESTING
 Run: python3 extract_candidate_frames.py
-Output: calibration_candidates/  (one jpg per N seconds, labelled with timestamp)
 """
 
 import os

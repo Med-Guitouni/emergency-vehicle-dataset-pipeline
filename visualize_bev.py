@@ -1,14 +1,7 @@
 """
 visualize_bev.py
 
-Produces a BEV "film" of the full  run from the 930 JSON files(test video).
-Duration matches the original video
-
-
-
-Vehicles persist between JSON frames using dead reckoning and are only
-removed when the ambulance passes them (y < -2m) or they have been
-missing for more than 3 seconds.
+Still needs work but good to scrape through json files visually
 
 
 Usage:  python3 visualize_bev.py

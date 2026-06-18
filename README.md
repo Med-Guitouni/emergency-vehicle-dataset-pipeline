@@ -170,27 +170,7 @@ Output: `output/video_name/t0000.json … t0929.json`
 ```
 
 ## Note for Validation Against other Datasets
-The pipeline was calibrated for one specific dashcam. Before validating the measured values against a dataset that
-has ground truth, several hard-coded assumptions must be re-calibrated to the new 
-camera (distributional shift) . The most important is the camera geometry in homography.py: 
-camera_height (currently 1.4m, the ambulance mount height) and focal_length_factor (currently 0.8 × frame width, an estimate)
-must be replaced with the real values of the validation dataset's camera.
-The horizon_ratio (currently 0.55) must also be re-measured for the new camera because
-it encodes the camera's pitch angle (point it at a frame from the new dataset and move the line until
-it sits on the true vanishing point of the road).Second, the spatial crop in preprocessor.py 
-(top 20%, bottom 15%) is tuned to where the ambulance dashboard and sky 
-sit in our frames; a different camera needs different crop fractions or the horizon
-geometry breaks. Third, the lane widths in lane_config.py (3.75m highway, 3.00m urban) follow 
-the German standard thats why a dataset recorded in another country needs its
-national lane-width values, since lane assignment and lateral offset depend on them.
-Fourth, the behaviour thresholds in annotator.py
-(lateral speed 0.5 m/s, heading 15°, braking −2.5 m/s²) were drawn from 
-highD German highway data; they are reasonable defaults but should be re-checked 
-if the validation dataset's driving context differs.
-Finally, all speeds remain relative to the ego vehicle: if the ground-truth dataset 
-reports absolute speeds, the ego vehicle's own speed must be added back before
-comparison.
---fix the camera intrinsics and horizon, --confirm distance_to_ego matches ground-truth
+erledigt 
 ## Position Reliability
 
 Every vehicle observation in the JSON includes a `position_reliable` field (true or false).

@@ -9,14 +9,13 @@ Speed is computed by differencing adjacent positions (forward = dy/dt,
 lateral = dx/dt) — identical to estimate_relative_velocity's math, without
 the internal-state hazard when frames are skipped.
 
-NEW: a STRAIGHT-LINE subset isolates pairs where BOTH the object and the ego
+ a STRAIGHT-LINE subset isolates pairs where BOTH the object and the ego
 have low yaw rate (no turning). This matches highway / Autobahn conditions and
 removes the urban-intersection artifacts (turning vehicles swing the near-face
-reference; ego turns inject apparent lateral motion). The straight-subset
-lateral-speed noise is the figure that actually applies to the A2 footage.
+reference; ego turns inject apparent lateral motion).
 
-Requires the homography.py override patch (Phase A).
-Run: python3 validate_nuscenes_phaseB.py
+
+ python3 validate_nuscenes_phaseB.py
 """
 
 import os

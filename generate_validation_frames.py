@@ -9,14 +9,14 @@ Layout:
   LEFT  = cropped video frame with metric grid + boxes labelled by ID only
   RIGHT = black info panel listing every vehicle sorted by distance to ego
 
-Nothing is recomputed. This validates what is already in the JSON.
+Nothing is recomputed. This Visulaizes  what is already in the JSON.
 
 Box colours:
   GREEN  = position_reliable True
   RED    = position_reliable False
 
-Run: python3 generate_validation_frames.py
-Requires: video in videos/, JSON output in output/<video_name>/
+python3 generate_validation_frames.py
+
 """
 
 import os

@@ -29,7 +29,7 @@ class HeuristicAnnotator:
     RULE 4 — speed drop >= 5 km/h  (empirical, §38 StVO; OFF by default — uses a
              magnitude (speed_kmh) which carries the zero-crossing artifact that
              was already fixed for acceleration, and is shaky under relative
-             speed. Enable only after supervisor review.)
+             speed. not enabled )
     RULE 5 — heading increasing over 3 consecutive frames  (Qiu et al. 2025)
 
     note — failed_to_yield needs MIN_OBSERVED_FRAMES of history.

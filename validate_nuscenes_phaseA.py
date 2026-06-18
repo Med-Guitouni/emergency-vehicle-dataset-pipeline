@@ -5,11 +5,7 @@ Tests the ACTUAL HomographyEstimator.get_vehicle_position() from homography.py
 against nuScenes ground truth, with ALL calibration replaced by nuScenes'
 real per-frame values so the only thing under test is the projection method.
 
-Calibration injected per frame (no ambulance constants left):
-  - focal length      : real fx from camera_intrinsic
-  - principal point cx: real cx from camera_intrinsic  (needs the patch)
-  - horizon row       : computed from the real camera pitch (extrinsics)
-  - camera height     : real sensor height above ego ground
+
 
 Ground truth target:
   PRIMARY  = near-bottom-centre of the 3D box (what the bottom-pixel method
