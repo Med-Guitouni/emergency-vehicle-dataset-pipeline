@@ -49,7 +49,7 @@ python3 -c "from downloader import VideoDownloader; VideoDownloader().download_s
 python3 main.py
 
 # Generate 50 annotated validation frames
-python3 generate_validation_frames.py
+python3 validate_nuscenes_phaseA.py
 ```
 
 Output: `output/video_name/t0000.json … t0929.json`

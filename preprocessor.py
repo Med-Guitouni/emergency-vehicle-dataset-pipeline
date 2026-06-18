@@ -75,7 +75,7 @@ class VideoPreprocessor:
     def extract_frames(self, fps=1):
         """
         OLD list-returning method, kept for helper scripts
-        (validate_distances.py, generate_validation_frames.py) that run at
+        (validate_distances.py, validate_nuscenes_phaseA.py) that run at
         1Hz where memory is not a problem. New code should use stream_frames.
         """
         frames = []

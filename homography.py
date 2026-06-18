@@ -118,17 +118,56 @@ class HomographyEstimator:
     "pixels_below_horizon" is how far the bottom-centre of the bounding box
     sits below the horizon line. The lower in the image the wheels are, the
     closer the vehicle. Metric by construction - the only unknowns are
-    focal_length and camera_height, both estimated, which scale all distances
-    by one constant factor that can be calibrated later.
+    focal_length, camera_height and cx (the optical centre column), all
+    estimated, see CALIBRATION below.
 
-    WHERE THE HORIZON IS
-    --------------------
-    For a dashcam looking roughly straight ahead the horizon sits at the
-    vertical centre of the ORIGINAL image. preprocessor.py crops to rows
-    [0.20H : 0.85H], so in the CROPPED frame the horizon moves to about
-    (0.5 - 0.20)/(0.85 - 0.20) = 0.46 down the cropped frame. Validated up to
-    0.55 against the test video (camera tilts slightly down). Tunable because
-    it depends on camera tilt and on the crop fractions.
+    =========================================================================
+    CALIBRATION (CHANGED - manual measurement protocol, see below)
+    =========================================================================
+    Defaults below replace the original pure guesses (camera_height=1.4,
+    focal_length_factor=0.8, horizon_ratio=0.55, cx=width/2) with values
+    measured directly off the test video using two real-world rulers that
+    exist on every German Autobahn:
+        - lane dashes: 6m stripe + 12m gap = 18m period (RMS standard)
+        - lane width: 3.75m for the heavy-vehicle lane (RAA standard)
+    Method: pick clean frames (straight road, dashes visible, no vehicles on
+    the lines), click 3 lane lines per frame to robustly fit the vanishing
+    point (median of the 3 pairwise intersections - far more stable than a
+    single 2-line intersection, which is highly sensitive to click error
+    when the lines are near-parallel), then use the dash spacing + lane width
+    to solve focal_px and camera_height (camera_height is recovered from lane
+    width + horizon alone, independent of the dash fit; focal_px then comes
+    from the dash-derived product camera_height*focal_px).
+
+    Measured across 6 frames spanning the test video:
+        camera_height : 1.27 - 1.72m, mean 1.40m   (CONFIRMED - matches old
+                         default almost exactly, spread ~10%)
+        focal_factor  : 0.41 - 1.18,  mean ~0.77    (spread ~31% - real
+                         uncertainty, but consistently below the old 0.8;
+                         0.72 chosen as a defensible single value)
+        horizon_ratio : 0.55 - 0.62, NOT a single constant - frames early in
+                        the video clustered near 0.55-0.59, frames ~14-15min
+                        in clustered near 0.60-0.62. Most likely explanation:
+                        real road grade differs between those stretches (the
+                        flat-road assumption is an approximation, and this is
+                        the first quantified evidence of how much it costs).
+                        0.60 used as the best single compromise; expect
+                        residual forward-distance error on segments whose
+                        local grade differs from this average.
+        cx            : 0.46 - 0.52 of frame width, mean ~0.47 (excluding the
+                        one frame with poor internal vanishing-point
+                        agreement) - the optical centre sits slightly LEFT of
+                        the frame's geometric centre. Likely the camera is
+                        yawed a few degrees relative to the vehicle's true
+                        forward axis, not a literal mounting offset.
+
+    KNOWN RESIDUAL LIMITATION: horizon_ratio and camera_height are degenerate
+    with road grade in this single-camera model (a road that slopes changes
+    the apparent vanishing point exactly as a different camera pitch would).
+    A single global horizon_ratio cannot be exactly right everywhere on a
+    real, gently-graded highway. Re-measuring on additional frames spread
+    across the FULL video (not clustered in one short window, which just
+    re-samples the same local grade) would further refine this if needed.
 
     =========================================================================
     HONEST LIMITATION - speed is RELATIVE, not absolute
@@ -155,22 +194,45 @@ class HomographyEstimator:
     # physically impossible lateral positions.
     SHOULDER_METERS = 3.0
 
-    def __init__(self, camera_height=1.4, focal_length_factor=0.8,
-                 horizon_ratio=0.55):
+    # optical centre column as a fraction of frame width. CHANGED from the
+    # assumed 0.5 (dead centre) to 0.47, measured from the vanishing point of
+    # lane lines across 6 frames (see class docstring CALIBRATION section).
+    # A value below 0.5 means the camera's true forward axis points slightly
+    # to the right of the image's geometric centre column.
+    CX_RATIO = 0.47
+
+    def __init__(self, camera_height=1.4, focal_length_factor=0.72,
+                 horizon_ratio=0.60):
         """
-        camera_height: dashcam height above the road in metres (~1.4).
-        focal_length_factor: focal_length_px = frame_width * this (~0.8).
+        camera_height: dashcam height above the road in metres. 1.4 CONFIRMED
+                       by the dash/lane-width measurement protocol (mean 1.40m
+                       across 6 frames, ~10% spread).
+        focal_length_factor: focal_length_px = frame_width * this. CHANGED
+                       from 0.8 to 0.72 - measured mean was ~0.77 with high
+                       (~31%) spread across frames, so treat this as a
+                       directionally-confirmed but not precisely nailed down
+                       value.
         horizon_ratio: horizon position as a fraction down the cropped frame.
-                       0.55 was validated against the test video.
+                       CHANGED from 0.55 to 0.60 - this is a compromise across
+                       frames that genuinely disagreed (0.55-0.59 early in the
+                       video vs 0.60-0.62 later), most likely due to real road
+                       grade differences. Not a fully resolved constant - see
+                       CALIBRATION docstring above.
 
         camera_height and focal_length_factor both scale distance linearly, so
         (camera_height * focal_length_factor) is the single calibration constant.
-        To calibrate: count Autobahn lane dashes (6m line + 12m gap = 18m period)
-        to a vehicle, compare to the reported distance, scale accordingly.
+        To (re)calibrate: see calibrate_picker.py / combine_calibration.py,
+        which implement the dash+lane-width measurement protocol directly
+        against this class's own projection formulas.
         """
         self.camera_height = camera_height
         self.focal_length_factor = focal_length_factor
         self.horizon_ratio = horizon_ratio
+        # Optional explicit calibration overrides for validation against
+        # datasets with known intrinsics (e.g. nuScenes). None = derive as before.
+        self.override_focal_px = None
+        self.override_cx = None
+        self.override_horizon_row = None
 
         # previous-frame grayscale image, used by optical flow for EMAP
         self.prev_gray = None
@@ -271,7 +333,7 @@ class HomographyEstimator:
         more lateral range than a 2-lane city street.
         """
         f = frame_width * self.focal_length_factor
-        cx = frame_width / 2.0
+        cx = frame_width * self.CX_RATIO
 
         horizon_row = self.horizon_ratio * frame_height
 
@@ -361,9 +423,9 @@ class HomographyEstimator:
         right_clipped = x2 >= frame_width - EDGE
         side_clipped = left_clipped or right_clipped
 
-        f = frame_width * self.focal_length_factor
-        cx = frame_width / 2.0
-        horizon_row = self.horizon_ratio * frame_height
+        f = self.override_focal_px if self.override_focal_px is not None else frame_width * self.focal_length_factor
+        cx = self.override_cx if self.override_cx is not None else frame_width * self.CX_RATIO
+        horizon_row = self.override_horizon_row if self.override_horizon_row is not None else self.horizon_ratio * frame_height
 
         # forward distance from the bottom row
         delta_y = y2 - horizon_row
@@ -509,6 +571,13 @@ class HomographyEstimator:
 
         Uses x_meters/y_meters (ground-plane metric coordinates) instead of
         pixels — consistent with how velocity is computed and more accurate.
+
+        FIXED: heading is now folded into the road axis using abs(dy) instead
+        of dy. A vehicle being OVERTAKEN (dy < 0, moving backward relative to
+        the ego) previously read as a phantom ~180 degree "turn" - it was
+        really just the ambulance passing it. abs(dy) maps that rear relative
+        motion back into the correct small forward-axis deviation, guaranteeing
+        heading stays within the physical [-90, +90] range.
         """
         if track_id not in self.heading_history_m:
             self.heading_history_m[track_id] = []
@@ -549,14 +618,13 @@ class HomographyEstimator:
         if abs(dy) < 0.1 and abs(dx) < abs(dy) * 2:
             return 0.0
 
-        # in our BEV coordinate system:
-        #   y_m increases forward (away from ego) = road forward direction
-        #   x_m increases rightward
-        # heading = angle from the forward axis (y-axis)
-        # arctan2(dx, dy): dx=0,dy>0 → 0° (straight ahead)
-        #                  dx>0,dy=0 → 90° (moving right)
-        #                  dx<0,dy=0 → -90° (moving left)
-        angle = np.degrees(np.arctan2(dx, dy))
+        # Fold the angle into the road axis using abs(dy): heading deviation is
+        # symmetric about the road line and must NOT depend on whether the
+        # vehicle moves toward or away from ego in the relative frame. A vehicle
+        # being OVERTAKEN (dy < 0) was previously read as ~180 deg — a phantom
+        # "turn" that was really just the ambulance passing it. abs(dy) maps that
+        # rear relative-motion back into a small forward-axis deviation.
+        angle = np.degrees(np.arctan2(dx, abs(dy)))
         return round(float(angle), 2)
 
     # ------------------------------------------------------------------

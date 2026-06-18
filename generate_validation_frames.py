@@ -1,12 +1,22 @@
 """
-generate_validation_frames.py
+generate_validation_frames.py  (GEOMETRY VALIDATION VERSION)
 
-Generates 50 annotated validation frames spread evenly across the full video.
-Each frame shows every detected vehicle with its full data on the bounding box.
-Saves to validation_frames/ replacing all old frames.
+Reads the JSON files produced by main.py and the original video,
+then draws the JSON values on each frame alongside a ground-plane
+metric reference grid.
 
-Run AFTER main.py has finished (reads the output JSON files, does not rerun
-the pipeline - much faster).
+Layout:
+  LEFT  = cropped video frame with metric grid + boxes labelled by ID only
+  RIGHT = black info panel listing every vehicle sorted by distance to ego
+
+Nothing is recomputed. This validates what is already in the JSON.
+
+Box colours:
+  GREEN  = position_reliable True
+  RED    = position_reliable False
+
+Run: python3 generate_validation_frames.py
+Requires: video in videos/, JSON output in output/<video_name>/
 """
 
 import os
@@ -15,166 +25,186 @@ import cv2
 import numpy as np
 
 from preprocessor import VideoPreprocessor
-from detector import VehicleDetector
-from tracker import VehicleTracker
 from homography import HomographyEstimator
 from lane_config import LaneConfig
-from annotator import HeuristicAnnotator
-from emergency_detector import EmergencyDetector
-from surrounding import SurroundingVehicles
 
-# ---- config ----
-N_FRAMES = 50  # how many frames to save
-OUTPUT_DIR = "validation_frames"
+# ---------------- config ----------------
+FIRST_N_SECONDS = 60
+OUTPUT_DIR      = "validation_frames"
+PANEL_W         = 280   # width of the right info panel in pixels
 
-# colour per behaviour label
-COLOURS = {
-    "normal": (180, 180, 180),  # grey
-    "yielded": (0, 220, 0),  # green
-    "braked_abruptly": (0, 140, 255),  # orange
-    "failed_to_yield": (0, 0, 255),  # red
-}
-UNKNOWN_COLOUR = (200, 200, 0)
+FWD_GRID_M = [5, 10, 20, 30, 50, 75, 100]
+LAT_GRID_M = [-10.5, -7.0, -3.5, 0.0, 3.5, 7.0, 10.5]
 
-# ---- setup ----
+COL_RELIABLE   = (0, 220, 0)
+COL_UNRELIABLE = (0, 0, 255)
+GRID_COL       = (255, 200, 0)
+AXIS_COL       = (0, 255, 255)
+PANEL_BG       = (20, 20, 20)
+TEXT_COL       = (220, 220, 220)
+
+
+def project_to_pixel(x_m, y_m, f, cx, horizon_row, cam_h):
+    if y_m <= 0.01:
+        return None
+    row = horizon_row + (cam_h * f) / y_m
+    col = cx + (x_m * f) / y_m
+    return int(round(col)), int(round(row))
+
+
+def draw_grid(vis, f, cx, fh, horizon_row, cam_h):
+    fw = vis.shape[1]
+    cv2.line(vis, (0, int(horizon_row)), (fw, int(horizon_row)), AXIS_COL, 1)
+    cv2.putText(vis, "horizon", (fw - 70, int(horizon_row) - 4),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, AXIS_COL, 1)
+
+    delta_bottom = max(fh - horizon_row, 1.0)
+    d_near = (cam_h * f) / delta_bottom
+    vanish = (int(cx), int(horizon_row))
+
+    for x_m in LAT_GRID_M:
+        end = project_to_pixel(x_m, d_near, f, cx, horizon_row, cam_h)
+        if end is None:
+            continue
+        thick = 2 if abs(x_m) < 0.01 else 1
+        color = AXIS_COL if abs(x_m) < 0.01 else GRID_COL
+        cv2.line(vis, vanish, end, color, thick)
+        if end[1] <= fh:
+            cv2.putText(vis, f"{x_m:+.1f}", (end[0] - 10, min(end[1] - 2, fh - 2)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.28, GRID_COL, 1)
+
+    for d in FWD_GRID_M:
+        row = horizon_row + (cam_h * f) / d
+        if row >= fh or row <= horizon_row:
+            continue
+        row = int(round(row))
+        left  = project_to_pixel(LAT_GRID_M[0],  d, f, cx, horizon_row, cam_h)
+        right = project_to_pixel(LAT_GRID_M[-1], d, f, cx, horizon_row, cam_h)
+        if left and right:
+            cv2.line(vis, (left[0], row), (right[0], row), GRID_COL, 1)
+        cv2.putText(vis, f"{d}m", (6, row - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, GRID_COL, 1)
+
+    cv2.circle(vis, (int(cx), fh - 4), 5, AXIS_COL, -1)
+    cv2.putText(vis, "EGO(0,0)", (int(cx) - 28, fh - 8),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.34, AXIS_COL, 1)
+
+
+def draw_panel(vehicles_sorted, fh):
+    """Build the right-side info panel as a numpy image."""
+    panel = np.full((fh, PANEL_W, 3), PANEL_BG, dtype=np.uint8)
+
+    cv2.putText(panel, "ID  type   x      y    spd   dist",
+                (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 60), 1)
+    cv2.line(panel, (4, 20), (PANEL_W - 4, 20), (80, 80, 80), 1)
+
+    row_h  = 13
+    y_cur  = 34
+    for v in vehicles_sorted:
+        if y_cur + row_h > fh:
+            break
+
+        reliable = v.get("position_reliable", True)
+        col = COL_RELIABLE if reliable else COL_UNRELIABLE
+
+        line = (f"id{v['id']:<4} {v['type'][:3]:<4}"
+                f" x={v['x_meters']:+5.1f}"
+                f" y={v['y_meters']:5.1f}"
+                f" {v['speed_kmh']:5.1f}km/h"
+                f" {v['distance_to_ego']:5.1f}m")
+        cv2.putText(panel, line, (6, y_cur),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.30, col, 1)
+        y_cur += row_h
+
+    return panel
+
+
+# ---------------- setup ----------------
 videos = [f"videos/{v}" for v in os.listdir("videos") if v.endswith(".mp4")]
 if not videos:
     raise SystemExit("No video found in videos/")
 
 video_path = videos[0]
 video_name = os.path.splitext(os.path.basename(video_path))[0][:30]
+json_dir   = os.path.join("output", video_name)
 
-# clear old validation frames
+if not os.path.exists(json_dir):
+    raise SystemExit(f"No JSON output at {json_dir}/ — run main.py first.")
+
 if os.path.exists(OUTPUT_DIR):
     for f in os.listdir(OUTPUT_DIR):
-        if f.endswith(".jpg") or f.endswith(".png"):
+        if f.endswith((".jpg", ".png")):
             os.remove(os.path.join(OUTPUT_DIR, f))
-    print(f"Cleared old frames from {OUTPUT_DIR}/")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ---- load pipeline components ----
-p = VideoPreprocessor(video_path)
-d = VehicleDetector()
-t = VehicleTracker()
-h = HomographyEstimator()
-a = HeuristicAnnotator()
-ed = EmergencyDetector(video_path)
-sv = SurroundingVehicles()
+p  = VideoPreprocessor(video_path)
+h  = HomographyEstimator()
 lc = LaneConfig()
 
-frames = p.extract_frames(fps=1)
-total = len(frames)
+cam_h      = h.camera_height
+foc_factor = h.focal_length_factor
+hor_ratio  = h.horizon_ratio
 
-sample_frames = [frames[i]["frame"] for i in range(min(10, total))]
-ed.daytime = ed.detect_daytime(sample_frames)
+print(f"Reading JSON from {json_dir}/")
+print(f"Saving t=0 to t={FIRST_N_SECONDS}s → {OUTPUT_DIR}/")
 
-# pick evenly spaced frame indices across the full video
-indices = sorted(set(int(i * (total - 1) / (N_FRAMES - 1)) for i in range(N_FRAMES)))
-
-print(f"Generating {len(indices)} annotated frames from {total} total frames...")
-
-prev_vehicles = []
-
-# we process every frame sequentially so Kalman/velocity state is correct,
-# but only SAVE the ones at the chosen indices
-for idx, item in enumerate(frames):
+saved = 0
+for item in p.extract_frames(fps=1):
     timestamp = item["timestamp"]
+    if timestamp > FIRST_N_SECONDS:
+        break
+
+    json_path = os.path.join(json_dir, f"t{timestamp:04d}.json")
+    if not os.path.exists(json_path):
+        print(f"  [skip] no JSON for t={timestamp}")
+        continue
+
+    with open(json_path) as jf:
+        data = json.load(jf)
+
     frame = p.spatial_crop(item["frame"])
     fh, fw = frame.shape[:2]
 
-    ego_H, depth_map = h.process_frame(frame)
-    tracked = t.update(d.model, frame, ego_H=ego_H, depth_map=depth_map)
+    f           = fw * foc_factor
+    cx          = fw / 2.0
+    horizon_row = hor_ratio * fh
 
-    emergency_active, triggered_by = ed.is_emergency_active(
-        timestamp, frame, [], prev_vehicles
-    )
+    vis = frame.copy()
+    draw_grid(vis, f, cx, fh, horizon_row, cam_h)
 
-    lane_info = lc.get_lane_info(video_name, timestamp)
-    vehicles = []
+    emergency = data.get("emergency_active", False)
+    cv2.putText(vis,
+                f"t={timestamp}s  emergency={'YES' if emergency else 'no'}  [FROM JSON]",
+                (5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (255, 255, 255), 1)
 
-    for v in tracked:
-        tid = v["track_id"]
-        center = v["center"]
-        bbox = v["bbox"]
-        # edge-aware position (matches main.py - see homography.py docstring)
-        x_m, y_m, reliable = h.get_vehicle_position(bbox, v["type"], fw, fh, lane_info)
-        fwd, lat, spd = h.estimate_relative_velocity(tid, x_m, y_m)
-        acc = h.estimate_acceleration(tid, spd)
-        jrk = h.estimate_jerk(tid, acc)
-        hdg = h.estimate_heading(tid, x_m, y_m)
-        dist = h.estimate_distance_to_ego(x_m, y_m)
-        lid = h.estimate_lane_id(center[0], fw, lane_info)
-        loff = h.estimate_lateral_offset(center[0], fw, lane_info)
+    vehicles = data.get("vehicles", [])
+    vehicles_sorted = sorted(vehicles, key=lambda v: v.get("distance_to_ego", 999))
 
-        vdata = {
-            "track_id": tid, "type": v["type"], "bbox": bbox, "center": center,
-            "x_meters": x_m, "y_meters": y_m,
-            "speed_kmh": spd, "forward_speed_ms": fwd, "lateral_speed_ms": lat,
-            "acceleration": acc, "jerk": jrk, "heading_angle": hdg,
-            "lane_id": lid, "lateral_offset": loff, "distance_to_ego": dist,
-            "lanes_total": lane_info["lanes"], "road_type": lane_info["road_type"]
-        }
-        vdata["behaviour"] = a.annotate(vdata, emergency_active)
-        vehicles.append(vdata)
+    for v in vehicles:
+        bbox = v.get("bbox")
+        if not bbox:
+            continue
+        x1, y1, x2, y2 = bbox
+        reliable = v.get("position_reliable", True)
+        col = COL_RELIABLE if reliable else COL_UNRELIABLE
 
-    sv.assign(vehicles, lane_info)
+        cv2.rectangle(vis, (x1, y1), (x2, y2), col, 2)
 
-    # ---- SAVE this frame if it is one of the chosen indices ----
-    if idx in indices:
-        vis = frame.copy()
+        # dot at bottom-centre (the projection input pixel)
+        bcx = int((x1 + x2) / 2)
+        cv2.circle(vis, (bcx, y2), 3, col, -1)
 
-        # horizon line (yellow) so you can see where the geometry is anchored
-        horizon_y = int(h.horizon_ratio * fh)
-        cv2.line(vis, (0, horizon_y), (fw, horizon_y), (0, 255, 255), 1)
+        # only ID on the box — everything else is in the panel
+        cv2.putText(vis, f"id{v['id']}", (x1 + 2, y1 - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, col, 1)
 
-        # emergency banner
-        if emergency_active:
-            cv2.rectangle(vis, (0, 0), (fw, 20), (0, 0, 160), -1)
-            cv2.putText(vis, "EMERGENCY ACTIVE", (5, 14),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    panel = draw_panel(vehicles_sorted, fh)
+    combined = np.hstack([vis, panel])
 
-        # timestamp + lane info top-right
-        info_str = (f"t={timestamp}s  lanes={lane_info['lanes']}"
-                    f"  type={lane_info['road_type']}")
-        cv2.putText(vis, info_str, (5, fh - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1)
+    out_path = os.path.join(OUTPUT_DIR, f"t{timestamp:04d}.jpg")
+    cv2.imwrite(out_path, combined)
+    saved += 1
 
-        for v in vehicles:
-            bbox = v["bbox"]
-            beh = v["behaviour"]
-            col = COLOURS.get(beh, UNKNOWN_COLOUR)
-
-            # bounding box
-            cv2.rectangle(vis, (bbox[0], bbox[1]), (bbox[2], bbox[3]), col, 2)
-
-            # build label lines - put as much as fits
-            lines = [
-                f"id={v['track_id']} {v['type']}",
-                f"fwd={v['y_meters']:.0f}m lat={v['x_meters']:.1f}m",
-                f"spd={v['speed_kmh']:.1f}km/h",
-                f"fv={v['forward_speed_ms']:.1f} lv={v['lateral_speed_ms']:.1f}m/s",
-                f"acc={v['acceleration']:.2f} jrk={v['jerk']:.2f}",
-                f"hdg={v['heading_angle']:.1f}  lane={v['lane_id']}",
-                f"dist={v['distance_to_ego']:.1f}m",
-                beh,
-            ]
-
-            # draw lines above the bbox (stack upward from top edge)
-            line_h = 11
-            for i, line in enumerate(reversed(lines)):
-                y_pos = bbox[1] - 4 - i * line_h
-                if y_pos < line_h:
-                    break  # no room above frame top
-                cv2.putText(vis, line, (bbox[0], y_pos),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.33, col, 1)
-
-        out_path = os.path.join(OUTPUT_DIR, f"t{timestamp:04d}.jpg")
-        cv2.imwrite(out_path, vis)
-
-    prev_vehicles = vehicles
-
-saved = len(indices)
 print(f"\nDone. {saved} frames saved to {OUTPUT_DIR}/")
-print("Colour key: GREY=normal  GREEN=yielded  ORANGE=braked_abruptly  RED=failed_to_yield")
-print("Yellow line = assumed horizon (ground-plane geometry anchor)")
-
+print("GREEN = position_reliable   RED = unreliable")
+print("Panel sorted by distance to ego (closest first)")
