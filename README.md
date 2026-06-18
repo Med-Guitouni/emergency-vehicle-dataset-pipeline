@@ -1,4 +1,5 @@
 #  Pipeline Emergency Vehicle Behaviour Dataset 
+not updated 
 ### 
 
 ---
@@ -26,7 +27,7 @@ Download weights (~98MB) into `models/`: [depth_anything_v2_vits.pth](https://hu
 git clone https://github.com/noyzzz/EMAP
 export PYTHONPATH=$PYTHONPATH:~/Desktop/einsatz_pipeline/EMAP
 ```
-⚠️ After cloning, open `EMAP/trackers/bytetrack/kalman_filter.py` and delete these four lines — they are ROS dependencies not needed here:
+ After cloning, open `EMAP/trackers/bytetrack/kalman_filter.py` and delete these four lines — they are ROS dependencies not needed here:
 ```python
 import rospy
 from std_msgs.msg import Float32MultiArray          # delete these two at the top
@@ -241,12 +242,7 @@ The unreliable rows are kept in the dataset rather than deleted.
 
 ## Known Limitations
 
-- **Speeds are relative**, not absolute. The ambulance's own speed is not subtracted. EMAP improves tracking stability but does not give absolute metric ego-speed from an uncalibrated camera.
-- **Camera intrinsics are estimated.** Focal length and mount height are reasonable defaults. Calibrate using Autobahn lane dash method (6m line + 12m gap = 18m period) documented in `validate_distances.py`.
-- **Lane boundaries are approximate.** Lane ID uses equal-division of frame width. `surrounding.py` uses metric x_meters directly which is more reliable.
-- **1Hz sampling.** Fast manoeuvres completed between frames are missed.
-- **`failed_to_yield` has false positives** for vehicles legitimately in front of the ambulance.
-
+to be written
 ---
 
 
