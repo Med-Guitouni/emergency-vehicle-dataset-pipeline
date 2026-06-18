@@ -122,55 +122,12 @@ class HomographyEstimator:
     estimated, see CALIBRATION below.
 
     =========================================================================
-    CALIBRATION (CHANGED - manual measurement protocol, see below)
+    CALIBRATION (CHANGED - manual measurement protocol)
     =========================================================================
-    Defaults below replace the original pure guesses (camera_height=1.4,
-    focal_length_factor=0.8, horizon_ratio=0.55, cx=width/2) with values
-    measured directly off the test video using two real-world rulers that
-    exist on every German Autobahn:
-        - lane dashes: 6m stripe + 12m gap = 18m period (RMS standard)
-        - lane width: 3.75m for the heavy-vehicle lane (RAA standard)
-    Method: pick clean frames (straight road, dashes visible, no vehicles on
-    the lines), click 3 lane lines per frame to robustly fit the vanishing
-    point (median of the 3 pairwise intersections - far more stable than a
-    single 2-line intersection, which is highly sensitive to click error
-    when the lines are near-parallel), then use the dash spacing + lane width
-    to solve focal_px and camera_height (camera_height is recovered from lane
-    width + horizon alone, independent of the dash fit; focal_px then comes
-    from the dash-derived product camera_height*focal_px).
 
-    Measured across 6 frames spanning the test video:
-        camera_height : 1.27 - 1.72m, mean 1.40m   (CONFIRMED - matches old
-                         default almost exactly, spread ~10%)
-        focal_factor  : 0.41 - 1.18,  mean ~0.77    (spread ~31% - real
-                         uncertainty, but consistently below the old 0.8;
-                         0.72 chosen as a defensible single value)
-        horizon_ratio : 0.55 - 0.62, NOT a single constant - frames early in
-                        the video clustered near 0.55-0.59, frames ~14-15min
-                        in clustered near 0.60-0.62. Most likely explanation:
-                        real road grade differs between those stretches (the
-                        flat-road assumption is an approximation, and this is
-                        the first quantified evidence of how much it costs).
-                        0.60 used as the best single compromise; expect
-                        residual forward-distance error on segments whose
-                        local grade differs from this average.
-        cx            : 0.46 - 0.52 of frame width, mean ~0.47 (excluding the
-                        one frame with poor internal vanishing-point
-                        agreement) - the optical centre sits slightly LEFT of
-                        the frame's geometric centre. Likely the camera is
-                        yawed a few degrees relative to the vehicle's true
-                        forward axis, not a literal mounting offset.
-
-    KNOWN RESIDUAL LIMITATION: horizon_ratio and camera_height are degenerate
-    with road grade in this single-camera model (a road that slopes changes
-    the apparent vanishing point exactly as a different camera pitch would).
-    A single global horizon_ratio cannot be exactly right everywhere on a
-    real, gently-graded highway. Re-measuring on additional frames spread
-    across the FULL video (not clustered in one short window, which just
-    re-samples the same local grade) would further refine this if needed.
 
     =========================================================================
-    HONEST LIMITATION - speed is RELATIVE, not absolute
+    LIMITATION - speed is RELATIVE, not absolute
     =========================================================================
     Velocity here is the change in a vehicle's position RELATIVE TO THE
     AMBULANCE per second. If the ambulance and a car both do 100 km/h, the

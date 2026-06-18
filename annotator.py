@@ -23,11 +23,7 @@ class HeuristicAnnotator:
     single uncalibrated camera at 1Hz). Same principle Rule 3 already used.
 
     RULE 2 — heading angle >= 15 degrees  (concept: Qiu et al. 2025; value empirical)
-    NOTE heading is now folded into the road axis (homography fix) so it can no
-    longer report the phantom ~180 deg of an overtaken vehicle. Literature does
-    not pin a single threshold degree; highway lane changes produce only a few
-    degrees of sustained deviation, so the ONSET pattern (Rule 5) is the more
-    reliable heading signal. 15 deg kept as a conservative instantaneous trigger.
+    // still working on
 
     RULE 3 — cumulative lateral >= 0.8m over 3s, monotonic  (window: highD durations)
     RULE 4 — speed drop >= 5 km/h  (empirical, §38 StVO; OFF by default — uses a
@@ -36,7 +32,7 @@ class HeuristicAnnotator:
              speed. Enable only after supervisor review.)
     RULE 5 — heading increasing over 3 consecutive frames  (Qiu et al. 2025)
 
-    MIN OBSERVATION GUARD — failed_to_yield needs MIN_OBSERVED_FRAMES of history.
+    note — failed_to_yield needs MIN_OBSERVED_FRAMES of history.
     PROXIMITY — 50m outer, 20m failed-to-yield.
     """
 

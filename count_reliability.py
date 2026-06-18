@@ -9,9 +9,9 @@ Prints:
 - reliable vs unreliable counts and percentages
 - breakdown by vehicle type (trucks likely worse than cars)
 - breakdown by distance bucket (close vehicles likely worse)
-- top 10 most unreliable track IDs (repeat offenders)
+- top 10 most unreliable track IDs
 
-Run from the pipeline root:
+
     python3 count_reliability.py
 """
 

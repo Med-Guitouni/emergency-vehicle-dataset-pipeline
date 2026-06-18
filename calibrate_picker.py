@@ -5,35 +5,7 @@ Step 2-4 of the calibration protocol. Interactive point-picking on a chosen
 frame to solve for the real camera parameters: horizon_ratio, cx, focal_px,
 camera_height.
 
-Run once per chosen frame:
-    python3 calibrate_picker.py 5
-    python3 calibrate_picker.py 90
 
-WHAT YOU WILL CLICK, IN ORDER (a window opens for each step):
-
-  STEP A - VANISHING POINT (2 clicks per lane line, 2 lines = 4 clicks)
-    Click two points along the LEFT lane line (near and far), then two points
-    along the RIGHT lane line (near and far) of the SAME lane (the one the
-    ego is in, or the one with the clearest dashes).
-    -> the two lines are extended and intersected to find the true horizon
-       row and column (cx).
-
-  STEP B - LANE WIDTH (2 clicks: left edge, right edge, AT THE SAME ROW)
-    Pick a row close to the bottom of the frame (near = more reliable).
-    Click the left lane line and the right lane line of the SAME lane at
-    that row.
-    -> known real width 3.75m (RAA, BAB heavy-vehicle lane) solves focal_px.
-
-  STEP C - DASH RULER (click the START of each visible dash, near to far)
-    Click the near-end (closer to ego) of each white dash you can see,
-    in order from nearest to farthest. Each dash START is exactly 18m
-    (6m stripe + 12m gap) from the previous dash START (RMS standard).
-    Click at least 4 dashes for a usable fit.
-    -> solves camera_height given focal_px and horizon_row from steps A/B.
-
-Close each plot window after clicking (or press Enter in the terminal) to
-move to the next step. Results are printed AND saved to calibration_log.json
-so multiple frames can be combined.
 
 Requires: matplotlib (already on your system via earlier installs)
 """
