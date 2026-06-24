@@ -20,10 +20,7 @@ class DepthEstimator:
     Depth Anything V2 (the non-metric checkpoint we use) outputs relative
     inverse depth - a unitless value that is monotonic with distance but is
     NOT in metres and is non linear. We deliberately do NOT convert it to
-    metres any more (an earlier version did, with a near-road anchor, and it
-    was wrong because the crop removes the near road). EMAP only needs the
-    relative ordering of depths, so we pass the raw model output through.
-
+    metres any more.
     Output: a 2D numpy array [H, W], same size as the input frame, of relative
     depth values. Returns None if the model is not installed.
     """
@@ -70,7 +67,7 @@ class DepthEstimator:
         """
         Run the depth model on one frame and return a relative-depth map.
         Returns a 2D numpy float32 array [H, W] of relative depth values
-        (not metres - see class docstring), or None if unavailable.
+        (not metres), or None if unavailable.
         """
         if self.model is None:
             return None
@@ -122,7 +119,7 @@ class HomographyEstimator:
     estimated, see CALIBRATION below.
 
     =========================================================================
-    CALIBRATION (CHANGED - manual measurement protocol)
+    CALIBRATION (not estimations - manual measurement protocol)
     =========================================================================
 
 
@@ -131,8 +128,7 @@ class HomographyEstimator:
     =========================================================================
     Velocity here is the change in a vehicle's position RELATIVE TO THE
     AMBULANCE per second. If the ambulance and a car both do 100 km/h, the
-    car's relative velocity is ~0. Absolute speed needs metric ego-odometry
-    (calibrated depth or GPS) which we do not have. Relative velocity is still
+    car's relative velocity is ~0. Relative velocity is still
     exactly the yielding signal: a car pulling aside has a clear sideways
     relative velocity regardless of how fast anyone goes forward.
 
@@ -173,14 +169,11 @@ class HomographyEstimator:
                        CHANGED from 0.55 to 0.60 - this is a compromise across
                        frames that genuinely disagreed (0.55-0.59 early in the
                        video vs 0.60-0.62 later), most likely due to real road
-                       grade differences. Not a fully resolved constant - see
-                       CALIBRATION docstring above.
+                       grade differences. Not a fully resolved constant -
 
         camera_height and focal_length_factor both scale distance linearly, so
         (camera_height * focal_length_factor) is the single calibration constant.
-        To (re)calibrate: see calibrate_picker.py / combine_calibration.py,
-        which implement the dash+lane-width measurement protocol directly
-        against this class's own projection formulas.
+
         """
         self.camera_height = camera_height
         self.focal_length_factor = focal_length_factor
@@ -420,35 +413,7 @@ class HomographyEstimator:
                 round(float(y_forward), 2),
                 reliable)
 
-    def is_position_reliable(self, bbox, frame_width, frame_height,
-                             x_m, lane_info=None):
-        """
-        LEGACY - superseded by get_vehicle_position() which handles edge
-        cases correctly (top-clip is fine, side-clip is reconstructed).
-        Kept only so older helper scripts keep running. Do not use in new
-        code: this old rule over-flags (any edge touch = unreliable) and
-        threw away 77.5% of close-range observations.
-        """
-        x1, y1, x2, y2 = bbox
-        EDGE = 2  # pixels of tolerance
 
-        clipped = (x1 <= EDGE or y1 <= EDGE
-                   or x2 >= frame_width - EDGE
-                   or y2 >= frame_height - EDGE)
-        if clipped:
-            return False
-
-        # did the lateral clamp fire?
-        if lane_info is not None:
-            half_road = (lane_info["lanes"] * lane_info["lane_width_meters"]) / 2.0
-        else:
-            half_road = (3 * self.LANE_WIDTH_METERS) / 2.0
-        max_lateral = half_road + self.SHOULDER_METERS
-
-        if abs(x_m) >= max_lateral - 0.01:
-            return False
-
-        return True
 
     # ------------------------------------------------------------------
     # VELOCITY - relative, derived from metric position change
@@ -517,72 +482,12 @@ class HomographyEstimator:
         negative    = drifting left
         ~90 or ~-90 = moving sideways (strong yielding signal)
 
-        WHY 3-SECOND WINDOW INSTEAD OF FRAME-TO-FRAME
+       3-SECOND WINDOW INSTEAD OF FRAME-TO-FRAME
         -----------------------------------------------
-        At 1Hz, a vehicle moving at the same speed as the ambulance shifts
-        only 1-3 pixels between frames. arctan2 of 1-3 pixels of noise gives
-        a random angle — useless. By using the direction from 3 seconds ago
-        to now in metric space, the displacement is large enough to be
-        meaningful (1-5 metres for a yielding vehicle) and the noise averages
-        out over the window.
 
-        Uses x_meters/y_meters (ground-plane metric coordinates) instead of
-        pixels — consistent with how velocity is computed and more accurate.
-
-        FIXED: heading is now folded into the road axis using abs(dy) instead
-        of dy. A vehicle being OVERTAKEN (dy < 0, moving backward relative to
-        the ego) previously read as a phantom ~180 degree "turn" - it was
-        really just the ambulance passing it. abs(dy) maps that rear relative
-        motion back into the correct small forward-axis deviation, guaranteeing
-        heading stays within the physical [-90, +90] range.
         """
-        if track_id not in self.heading_history_m:
-            self.heading_history_m[track_id] = []
 
-        history = self.heading_history_m[track_id]
-        history.append((x_m, y_m))
-
-        # keep only the last HEADING_WINDOW frames
-        if len(history) > self.HEADING_WINDOW:
-            history.pop(0)
-
-        if len(history) < 2:
-            # not enough history yet
-            return 0.0
-
-        # direction from oldest stored position to current
-        x_old, y_old = history[0]
-        dx = x_m - x_old
-        dy = y_m - y_old
-
-        if abs(dx) < 0.01 and abs(dy) < 0.01:
-            # vehicle has not moved meaningfully - no heading information
-            return 0.0
-
-        # minimum total displacement to trust the heading
-        # below 0.3m over 3 seconds the signal is too noisy to be meaningful
-        total_disp = np.sqrt(dx * dx + dy * dy)
-        if total_disp < 0.3:
-            return 0.0
-
-        # boundary case: if forward displacement is near zero but lateral is not,
-        # arctan2 snaps to exactly ±90°. This happens when a vehicle sits at
-        # nearly the same forward distance for 3 seconds (common in slow traffic
-        # being overtaken). A vehicle that hasn't moved forward is not necessarily
-        # moving sideways — it may just be stationary relative to the ambulance.
-        # Require that lateral displacement is at least 2x the forward displacement
-        # to confidently report a sideways heading. Otherwise report 0° (straight).
-        if abs(dy) < 0.1 and abs(dx) < abs(dy) * 2:
-            return 0.0
-
-        # Fold the angle into the road axis using abs(dy): heading deviation is
-        # symmetric about the road line and must NOT depend on whether the
-        # vehicle moves toward or away from ego in the relative frame. A vehicle
-        # being OVERTAKEN (dy < 0) was previously read as ~180 deg — a phantom
-        # "turn" that was really just the ambulance passing it. abs(dy) maps that
-        # rear relative-motion back into a small forward-axis deviation.
-        angle = np.degrees(np.arctan2(dx, abs(dy)))
-        return round(float(angle), 2)
+        return 0
 
     # ------------------------------------------------------------------
     # DISTANCE / LANE / LATERAL OFFSET

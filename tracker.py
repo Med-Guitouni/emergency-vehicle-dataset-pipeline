@@ -148,6 +148,10 @@ class VehicleTracker:
         self.current_yaw_dot = 0.0
         self.current_D_dot = 0.0
 
+        # counter for synthetic IDs assigned to side-strip detections
+        # starts at 9000 to avoid any conflict with ByteTrack IDs (1-8999)
+        self._edge_id_counter = 9000
+
         print("ByteTrack tracker ready")
 
     def _extract_ego_motion_from_H(self, H, depth_map, frame_width):
@@ -288,6 +292,89 @@ class VehicleTracker:
             # just without ego-motion compensation this frame
             pass
 
+    @staticmethod
+    def _iou(boxA, boxB):
+        """Intersection-over-Union between two [x1,y1,x2,y2] boxes."""
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+        inter = max(0, xB - xA) * max(0, yB - yA)
+        if inter == 0:
+            return 0.0
+        aA = (boxA[2]-boxA[0]) * (boxA[3]-boxA[1])
+        aB = (boxB[2]-boxB[0]) * (boxB[3]-boxB[1])
+        return inter / float(aA + aB - inter)
+
+    def _detect_edge_vehicles(self, model, frame, existing_tracked):
+        """
+        Run YOLO on the left and right 40% strips of the frame to catch
+        close-range vehicles that are partially out of frame and therefore
+        missed or poorly detected by full-frame inference.
+
+        Why this works: YOLO was trained on images where vehicles occupy a
+        moderate fraction of the frame. When a vehicle is so close it fills
+        most of the left or right side, full-frame YOLO sees a partial blob
+        instead of a recognisable vehicle shape. Running on the side strip
+        presents the vehicle at a more normal scale relative to the crop.
+
+        Detections that overlap an already-tracked box (IoU > 0.3) are
+        discarded to avoid double-counting. The rest are assigned synthetic
+        IDs starting at 9000, which cannot conflict with ByteTrack IDs.
+
+        These edge detections appear in the pipeline output and JSON exactly
+        like normal tracks. They will not have stable IDs across frames if
+        the vehicle moves out of the strip, but for close-range vehicles
+        that stay at the edge this is acceptable.
+        """
+        fh, fw = frame.shape[:2]
+        STRIP_W = int(fw * 0.40)
+        CONF    = 0.20   # lower threshold than main detection (0.25)
+        IOU_THR = 0.30   # suppress if overlap with existing track
+
+        VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+        existing_boxes  = [v["bbox"] for v in existing_tracked]
+        supplemental    = []
+
+        strips = [
+            ("left",  0,           STRIP_W),
+            ("right", fw - STRIP_W, fw),
+        ]
+
+        for _, x_start, x_end in strips:
+            strip   = frame[:, x_start:x_end]
+            results = model.predict(strip, verbose=False, conf=CONF)[0]
+
+            for box in results.boxes:
+                class_id = int(box.cls[0])
+                if class_id not in VEHICLE_CLASSES:
+                    continue
+                if float(box.conf[0]) < CONF:
+                    continue
+
+                # convert strip-local coords to full-frame coords
+                sx1, sy1, sx2, sy2 = map(int, box.xyxy[0])
+                x1 = sx1 + x_start
+                x2 = sx2 + x_start
+                y1, y2 = sy1, sy2
+
+                full_box = [x1, y1, x2, y2]
+
+                # skip if already captured by main tracking pass
+                if any(self._iou(full_box, eb) > IOU_THR
+                       for eb in existing_boxes):
+                    continue
+
+                self._edge_id_counter += 1
+                supplemental.append({
+                    "track_id": self._edge_id_counter,
+                    "type":     VEHICLE_CLASSES[class_id],
+                    "bbox":     full_box,
+                    "center":   [(x1 + x2) // 2, (y1 + y2) // 2],
+                })
+
+        return supplemental
+
     def update(self, model, frame, ego_H=None, depth_map=None):
         """
         Run one tracking step on the current frame.
@@ -391,7 +478,11 @@ class VehicleTracker:
                     del self.track_states[tid]
                     del self.track_missed[tid]
 
-        return tracked
+        # side-strip detection: catch close-range vehicles at frame edges
+        # that full-frame YOLO misses because they appear as partial blobs
+        edge_detections = self._detect_edge_vehicles(model, frame, tracked)
+        tracked.extend(edge_detections)
 
+        return tracked
 
 

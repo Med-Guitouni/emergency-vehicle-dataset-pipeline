@@ -1,0 +1,53 @@
+
+============================================================
+PHASE A — position validation (real get_vehicle_position)
+nuScenes calibration injected; horizon from real camera pitch
+============================================================
+
+Total usable observations: 1482
+Flagged unreliable: 750 (50.6%)
+  -> box touches edge, or lateral-clamp fired
+
+[ALL observations]  n=1482
+  FORWARD vs near-face   mean +14.40  MAE 17.41  RMSE 48.22 m
+    within: <=1m  24.6%  <=2m  40.1%  <=5m  61.1%
+  LATERAL vs near-face   mean  -0.54  MAE  2.97  RMSE  4.87 m
+    within: <=0.5m  24.4%  <=1m  38.6%  <=2m  55.1%
+
+[RELIABLE only]  n=732
+  FORWARD vs near-face   mean  +3.96  MAE  7.63  RMSE 27.05 m
+    within: <=1m  27.7%  <=2m  48.8%  <=5m  70.9%
+  LATERAL vs near-face   mean  -0.00  MAE  1.13  RMSE  1.71 m
+    within: <=0.5m  40.3%  <=1m  62.3%  <=2m  80.6%
+
+FORWARD ERROR BY DISTANCE — reliable only
+  Range         N     Mean     MAE    RMSE    <=1m   <=2m   <=5m
+   0-10 m     38   -0.06m   0.65m   0.78m   73.7% 100.0% 100.0%
+  10-20 m    255   +0.68m   2.14m   2.92m   33.3%  63.9%  89.0%
+  20-30 m    243   +1.53m   5.63m  21.02m   27.6%  46.5%  70.0%
+  30-45 m    133   +9.02m  14.62m  40.05m   12.0%  24.1%  50.4%
+  45-60 m     63  +18.39m  27.05m  58.10m   11.1%  17.5%  27.0%
+
+============================================================
+EGO SPEED — Rill (2019): flow / depth, K from ground-plane calibration
+v = K * mean(|OF|) / (mean(D_model) * dt)  |  K = h * mean(D_ground/delta_y)
+Ref: Rill arXiv:1907.06989 (2019) — RMSE < 1 m/s on KITTI
+============================================================
+
+  n=394
+  GT   mean 5.64  min 0.00  max 15.16  m/s
+  EST  mean 0.24  min 0.00  max 0.54  m/s
+
+  ERROR (est - gt)
+    mean -5.404  MAE 5.452  RMSE 7.111  m/s
+    within: <=0.5 26.9%  <=1 27.4%  <=2 30.7%  <=5 51.5%  m/s
+
+  ERROR BY GT SPEED RANGE
+  Range           N     Mean     MAE    RMSE     <=1    <=2
+   0-2   m/s   115  -0.036   0.201   0.404   93.9% 100.0%
+   2-5   m/s    80  -3.336   3.336   3.461    0.0%   7.5%
+   5-10  m/s   116  -7.205   7.205   7.320    0.0%   0.0%
+  10-20  m/s    83 -12.318  12.318  12.384    0.0%   0.0%
+
+  nuScenes mean GT ego: 5.6 m/s (20.3 km/h) — dense urban, low speed.
+  Lyft Phase C covers highway speeds (up to 35 m/s).

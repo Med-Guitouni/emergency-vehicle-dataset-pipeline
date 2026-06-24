@@ -1,0 +1,70 @@
+{
+  "timestamp": 434,
+  "video_source": "20240720_einsatz_1080p",
+  "emergency_active": true,
+  "scenario_type": "highway",
+  "vehicles": [
+    {
+      "id": 2948,
+      "type": "truck",
+      "x_meters": -1.83,
+      "y_meters": 8.96,
+      "position_reliable": true,
+      "speed_kmh": 0.82,
+      "forward_speed_ms": 0.15,
+      "lateral_speed_ms": 0.17,
+      "acceleration": -0.34,
+      "jerk": -0.27,
+      "lane_id": 2,
+      "lateral_offset": -1.66,
+      "distance_to_ego": 9.14,
+      "lanes_total": 3,
+      "road_type": "highway",
+      "lane_source": "config",
+      "preceding_id": null,
+      "following_id": null,
+      "left_preceding_id": null,
+      "left_following_id": null,
+      "right_preceding_id": null,
+      "right_following_id": 2647,
+      "behaviour": "yielded",
+      "bbox": [
+        405,
+        26,
+        949,
+        628
+      ]
+    },
+    {
+      "id": 2647,
+      "type": "truck",
+      "x_meters": 3.04,
+      "y_meters": 7.23,
+      "position_reliable": true,
+      "speed_kmh": 0.87,
+      "forward_speed_ms": -0.16,
+      "lateral_speed_ms": 0.18,
+      "acceleration": 0.09,
+      "jerk": 0.1,
+      "lane_id": 3,
+      "lateral_offset": -0.45,
+      "distance_to_ego": 7.84,
+      "lanes_total": 3,
+      "road_type": "highway",
+      "lane_source": "config",
+      "preceding_id": null,
+      "following_id": null,
+      "left_preceding_id": 2948,
+      "left_following_id": null,
+      "right_preceding_id": null,
+      "right_following_id": null,
+      "behaviour": "yielded",
+      "bbox": [
+        1136,
+        2,
+        1910,
+        691
+      ]
+    }
+  ]
+}

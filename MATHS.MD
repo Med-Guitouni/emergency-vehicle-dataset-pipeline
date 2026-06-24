@@ -89,25 +89,7 @@ A vehicle that slams on the brakes :going from zero deceleration to heavy decele
 onsets that might straddle two 1-second frames and miss the pure acceleration threshold.
 
 ### Heading Angle
-
-Heading captures the direction a vehicle is moving relative to the road forward axis:
-
-```
-dx = x_now - x_3_seconds_ago
-dy = y_now - y_3_seconds_ago
-heading = degrees(arctan2(dx, dy))
-```
-
-Where arctan2 is the four-quadrant arctangent that returns the angle of the displacement vector. Using `arctan2(dx, dy)` with dx first and dy second gives 0° 
-when the vehicle moves straight ahead (dy positive, dx zero), positive degrees when drifting right,
-and negative when drifting left. The 3-second window (instead of frame-to-frame)
-exists because at 1 frame per second, a vehicle moving at nearly the same speed as the ambulance
-shifts only 1-2 pixels between frames, and the direction of a 1-2 pixel wobble is essentially
-random noise. Over 3 seconds the displacement is large enough to point in a meaningful direction.
-Guards prevent reporting a heading when total displacement is less than 0.3 metres
-(too small to trust) or when the forward component is near zero(which would snap the angle to exactly ±90°). 
-Heading is computed internally for the behaviour annotator but is not exported to the JSON output
-because even with the 3-second window it remains too noisy at 1Hz
+In work ( code that exists is dead )
 
 ### Trajectory Smoothing (RTS)
 
@@ -121,4 +103,3 @@ The smoother is also reliability-aware: measurements that came from clipped boun
 
 All of these calculations produce a consistent real-world coordinate system: x in metres (lateral, left-right) and y in metres (forward, distance ahead), 
 with the ambulance fixed at the origin (0, 0). 
-The BEV visualiser reads the JSON output files and reconstructs this top-down scene for every second of the video. 

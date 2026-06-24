@@ -11,9 +11,12 @@ class VideoDownloader:
     def download_channel(self, channel_url, max_videos=32):
         options = {
             'outtmpl': f'{self.output_dir}/%(upload_date)s_%(title)s.%(ext)s',
-            'format': 'mp4',
+            # best video + best audio, merged into mp4
+            # falls back gracefully if a format is unavailable
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
+            'merge_output_format': 'mp4',
             'playlistend': max_videos,
-            'quiet': False
+            'quiet': False,
         }
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([channel_url])
@@ -21,8 +24,9 @@ class VideoDownloader:
     def download_single(self, url):
         options = {
             'outtmpl': f'{self.output_dir}/%(upload_date)s_%(title)s.%(ext)s',
-            'format': 'mp4',
-            'quiet': False
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
+            'merge_output_format': 'mp4',
+            'quiet': False,
         }
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([url])
@@ -33,4 +37,3 @@ class VideoDownloader:
         for v in videos:
             print(f"  {v}")
         return videos
-

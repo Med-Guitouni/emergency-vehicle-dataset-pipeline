@@ -1,0 +1,39 @@
+{
+  "timestamp": 609,
+  "video_source": "20240720_einsatz_1080p",
+  "emergency_active": true,
+  "scenario_type": "highway",
+  "vehicles": [
+    {
+      "id": 3827,
+      "type": "truck",
+      "x_meters": 3.04,
+      "y_meters": 6.57,
+      "position_reliable": false,
+      "speed_kmh": 0.28,
+      "forward_speed_ms": 0.05,
+      "lateral_speed_ms": 0.06,
+      "acceleration": 0.2,
+      "jerk": 0.12,
+      "lane_id": 3,
+      "lateral_offset": -0.03,
+      "distance_to_ego": 7.24,
+      "lanes_total": 3,
+      "road_type": "highway",
+      "lane_source": "config",
+      "preceding_id": null,
+      "following_id": null,
+      "left_preceding_id": null,
+      "left_following_id": null,
+      "right_preceding_id": null,
+      "right_following_id": null,
+      "behaviour": "failed_to_yield",
+      "bbox": [
+        1271,
+        3,
+        1920,
+        688
+      ]
+    }
+  ]
+}

@@ -1,17 +1,13 @@
-#  Pipeline Emergency Vehicle Behaviour Dataset 
-not fully  updated 
-### 
+# Emergency Vehicle Behaviour Dataset Pipeline
 
----
-
-
+A Python pipeline that processes YouTube dashcam videos from inside German ambulances on emergency runs and produces one JSON file per second describing every nearby vehicle's position, speed, and behaviour. 
 
 ---
 
 ## Setup
 
 ```bash
-pip3 install yt-dlp ultralytics opencv-python numpy librosa torch torchvision
+pip3 install yt-dlp ultralytics opencv-python numpy torch torchvision
 brew install ffmpeg
 ```
 
@@ -27,16 +23,21 @@ Download weights (~98MB) into `models/`: [depth_anything_v2_vits.pth](https://hu
 git clone https://github.com/noyzzz/EMAP
 export PYTHONPATH=$PYTHONPATH:~/Desktop/einsatz_pipeline/EMAP
 ```
- After cloning, open `EMAP/trackers/bytetrack/kalman_filter.py` and delete these four lines — they are ROS dependencies not needed here:
+After cloning, open `EMAP/trackers/bytetrack/kalman_filter.py` and delete these four lines (ROS dependencies not needed here):
 ```python
 import rospy
-from std_msgs.msg import Float32MultiArray          # delete these two at the top
-params_array = Float32MultiArray()                  # delete these two inside __init__
-params_array.data = [self._q1, self._q4, ...]
+from std_msgs.msg import Float32MultiArray          # delete at top
+params_array = Float32MultiArray()                  # delete inside __init__
+params_array.data = [self._q1, self._q4, ...]       # delete inside __init__
 ```
 Test: `python3 -c "from EMAP.trackers.bytetrack.kalman_filter import KalmanFilter; print('OK')"`
 
-To make paths permanent: `echo 'export PYTHONPATH=...' >> ~/.zshrc && source ~/.zshrc`
+To make paths permanent:
+```bash
+echo 'export PYTHONPATH=$PYTHONPATH:~/Desktop/einsatz_pipeline/EMAP' >> ~/.zshrc
+echo 'export PYTHONPATH=$PYTHONPATH:~/Desktop/einsatz_pipeline/Depth-Anything-V2' >> ~/.zshrc
+source ~/.zshrc
+```
 
 ---
 
@@ -48,29 +49,98 @@ python3 -c "from downloader import VideoDownloader; VideoDownloader().download_s
 
 # Run the full pipeline
 python3 main.py
-
-# Generate 50 annotated validation frames
-python3 validate_nuscenes_phaseA.py
 ```
 
 Output: `output/video_name/t0000.json … t0929.json`
 
+Before running a new video, add it to `video_lanes.json` (see Lane Config below).
+
 ---
 
-## Pipeline
-Only these classes are relevant ; others found are either just documentation of what was tried or tests
-| File                    |  | What it does                                                            |
-|-------------------------|--|-------------------------------------------------------------------------|
-| `downloader.py`         |  | Downloads videos via yt-dlp                                             |
-| `preprocessor.py`       |  | Extracts 1 frame/sec, crops top 20% and bottom 15%            |
-| `detector.py`           |  | YOLOv8x detects cars, trucks, buses, motorcycles (conf ≥ 0.25)          |
-| `tracker.py`            |  | ByteTrack + EMAP-enhanced Kalman Filter for stable IDs                  |
-| `homography.py`         |  | Ground-plane pinhole projection → real-world metres, split velocity, ego motion |
-| `annotator.py`          |  | Labels vehicle behaviour per frame (5 rules, literature-backed)         | |
-| `scene_classifier.py`   |  | MIT Places365 ResNet18 → highway / urban / intersection / roundabout    |
-| `lane_config.py`        |  | Manual ground-truth lane count per video (see `video_lanes.json`)       |
-| `surrounding.py`        |  | highD-style 6-neighbour IDs from metric positions                       |
-| `exporter.py`           |  | Writes one JSON per second per video                                    |
+## Pipeline Architecture
+
+The pipeline runs in two phases with RTS smoothing between them.
+
+**Phase 1 — Collect** (streaming, 1 frame/second):
+- Crop sky (top 20%) and dashboard (bottom 15%)
+- YOLO detects vehicles; ByteTrack + EMAP assigns stable IDs
+- Ground-plane pinhole projection converts each vehicle's pixel position to real-world metres
+- Scene classifier and lane config determine road type and emergency state
+- Raw positions stored per frame (no metrics yet)
+
+**Between Phases — RTS Smoothing**:
+- Each vehicle's full trajectory is smoothed with a Rauch-Tung-Striebel smoother
+- Removes detection jitter and pixel quantisation noise before any metric is derived
+- Unreliable observations (clipped boxes) are down-weighted so the motion model dominates
+- Same post-processing used by highD (Krajewski et al. 2018) and INTERACTION (Zhan et al. 2019)
+
+**Phase 2 — Compute + Export**:
+- Split velocity (forward + lateral), acceleration, jerk, heading derived from smoothed positions
+- Lane assignment, surrounding vehicle IDs, behaviour labels
+- One JSON file per second written to `output/video_name/`
+
+---
+
+## Pipeline Files
+
+| File | What it does |
+|---|---|
+| `main.py` | Orchestrates both phases and RTS smoothing |
+| `downloader.py` | Downloads videos via yt-dlp at best available quality |
+| `preprocessor.py` | Extracts 1 frame/sec, crops top 20% and bottom 15% |
+| `detector.py` | YOLOv8x detects cars, trucks, buses, motorcycles (conf ≥ 0.25) |
+| `tracker.py` | ByteTrack + EMAP-enhanced Kalman Filter for stable IDs across frames |
+| `homography.py` | Ground-plane pinhole projection → real-world metres, split velocity, acceleration, jerk, heading, ego motion |
+| `smoother.py` | RTS smoother — runs between Phase 1 and Phase 2 |
+| `annotator.py` | Labels vehicle behaviour per frame using 5 kinematic rules |
+| `scene_classifier.py` | MIT Places365 ResNet18 → highway / urban / intersection / roundabout |
+| `lane_config.py` | Reads `video_lanes.json` — manual ground-truth lane count and emergency timing |
+| `surrounding.py` | highD-style 6-neighbour IDs from metric positions |
+| `exporter.py` | Writes one JSON per second per video |
+
+---
+
+## Calibration Constants
+
+These are set in `homography.py` and measured from the test video using Autobahn lane dash spacing (18m period) and lane width (3.75m) as physical rulers:
+
+| Constant | Value | Notes |
+|---|---|---|
+| `camera_height` | 1.4 m | Confirmed — mean 1.40m across 6 frames |
+| `focal_length_factor` | 0.72 | focal_px = frame_width × 0.72 |
+| `horizon_ratio` | 0.60 | Fraction down the cropped frame where horizon sits |
+| `CX_RATIO` | 0.47 | Optical centre column  |
+
+
+
+---
+
+## Lane Config (`video_lanes.json`)
+
+Each video needs a manual entry before processing. This is the only manual input the pipeline requires.
+
+```json
+{
+  "video_name": {
+    "emergency_start_second": 0,
+    "lanes": [
+      {
+        "from_second": 0,
+        "to_second": 930,
+        "lanes": 3,
+        "road_type": "highway",
+        "notes": "A2 Autobahn"
+      }
+    ]
+  }
+}
+```
+
+`video_name` must match `os.path.splitext(os.path.basename(path))[0][:30]`.
+
+Lane widths are automatic from road type (RASt 06): highway → 3.75m, urban → 3.00m.
+
+Emergency is latched: once `emergency_start_second` is reached it stays active for the rest of the video.
 
 ---
 
@@ -78,150 +148,95 @@ Only these classes are relevant ; others found are either just documentation of 
 
 ```json
 {
-  "timestamp":              ,   
-  "video_source":           ,   
-  "emergency_active":       ,   // true once emergency_start_second is reached (from video_lanes.json)
-  "scenario_type":          ,   // scene classifier output: highway / urban / intersection / roundabout
+  "timestamp":        ,   // seconds from video start
+  "video_source":     ,   // video filename (truncated to 30 chars)
+  "emergency_active": ,   // true once emergency_start_second is reached
+  "scenario_type":    ,   // highway / urban / intersection / roundabout (scene classifier)
   "vehicles": [
     {
-      "id":                 ,   //  ID assigned by ByteTrack 
-
-      "type":               ,   // car / truck / bus / motorcycle — from YOLO class
-
-      "x_meters":           ,   // lateral position in metres. + = right of ambulance centre, - = left.
-                                // derived from ground-plane pinhole projection (camera height + focal length)
-
-      "y_meters":           ,   // forward distance in metres from the ambulance.
-                             
-
-      "position_reliable":  ,   // false when the bounding box is clipped at a frame edge
-                                // (vehicle partially outside camera view — tyres not visible,
-                                // ground-plane projection unreliable). 
-
-      "speed_kmh":          ,   // overall speed magnitude in km/h — combines forward and lateral motion.
-                                // this is RELATIVE to the ambulance, not absolute ground speed.
-                                // if ambulance and vehicle travel at same speed, this reads ~0.
-                                // (Krajewski et al. 2018 — highD dataset)
-
-      "forward_speed_ms":   ,   // speed component ALONG the road in m/s.
-                                //positive moving away from ambulance.//negative  ambulance catching up.
-                                // different from speed_kmh which is the total magnitude regardless of direction.
-                                // a braking vehicle slows this value. a vehicle being overtaken has negative value.
-                                // (Krajewski et al. 2018 — highD dataset, longitudinal/lateral split)
-
-      "lateral_speed_ms":   ,   // speed component ACROSS the road in m/s.
-                                // + = moving right. - = moving left.
-                                // this is the direct yielding signal: a vehicle pulling aside
-                                // shows a clear lateral_speed_ms even when forward_speed_ms is near zero.
-                                // (Pierson et al. 2019 — highD analysis; Krajewski et al. 2018)
-
-      "acceleration":       ,   // change in speed_kmh per second, converted to m/s².
-                                // negative = decelerating (braking). large negative = hard brake.
-                                // threshold -2.5 m/s² used for braked_abruptly label.
-                                
-
-      "jerk":               ,   // change in acceleration per second (m/s³).
-                                // different from acceleration: acceleration tells you HOW FAST the vehicle
-                                // is changing speed; jerk tells you HOW SUDDENLY that change happened.
-                                // high jerk = panic stop (acceleration changed very abruptly).
-                                // low jerk = smooth braking even if deceleration is large.
-                                // (INTERACTION dataset — Zhan et al. 2019)
-
-      "lane_id":            , 
-
-      "lateral_offset":     ,   // distance from the centre of the vehicle's lane in metres.
-                                // + = right of lane centre. - = left of lane centre.
-                                // used in annotator Rule 3
-
-      "distance_to_ego":    ,   // straight-line distance to the ambulance in metres.
-                                // sqrt(x_meters² + y_meters²). used for proximity thresholds in annotator.
-
-      "lanes_total":        ,   // total number of lanes on this road at this timestamp.
-                                // manually annotated in video_lanes.json. 
-
-      "road_type":          ,   // highway / urban / intersection / roundabout.
-                                // from video_lanes.json (ground truth) or scene classifier fallback.
-
-      "lane_source":        ,   // "config" = from video_lanes.json (ground truth).
-                                // "scene_classifier" = automatic fallback (video not yet annotated).
-                                
-
-      "preceding_id":       ,   
-      "following_id":       ,   
-      "left_preceding_id":  ,   // all six computed from x_meters / y_meters. same-lane threshold = half lane width.
-      "left_following_id":   ,  // (Krajewski et al. 2018 — highD surrounding vehicle IDs)
-       "right_preceding_id"   
-        "right_following_id"
-         
-                                
-
-      "behaviour":          ,   // normal / yielded / braked_abruptly / failed_to_yield.
-                                // only assigned when emergency_active = true and vehicle within 50m.
-                                // rules based on Pierson et al. 2019, Qiu et al. 2025, braking literature.
-                                // see annotator.py for full rule documentation.
-
-      "bbox":               ,   // bounding box [x1, y1, x2, y2] in pixels of the cropped frame.
-                                // cropped frame = original with top 20% and bottom 15% removed.
+      "id":                  ,  // stable ID assigned by ByteTrack
+      "type":                ,  // car / truck / bus / motorcycle
+      "x_meters":            ,  // lateral position in metres. + = right of ambulance, - = left
+      "y_meters":            ,  // forward distance in metres from ambulance
+      "position_reliable":   ,  // false when bbox is clipped at frame edge (see below)
+      "speed_kmh":           ,  // overall speed magnitude in km/h — RELATIVE to ambulance
+      "forward_speed_ms":    ,  // speed along road in m/s. + = moving away, - = ego catching up
+      "lateral_speed_ms":    ,  // speed across road in m/s. + = right, - = left. Direct yielding signal
+      "acceleration":        ,  // change in forward_speed_ms per second (m/s²). Negative = braking
+      "jerk":                ,  // change in acceleration per second (m/s³). High = panic stop
+      "lane_id":             ,  // lane number 1 (left) to N (right)
+      "lateral_offset":      ,  // distance from lane centre in metres. + = right of centre
+      "distance_to_ego":     ,  // straight-line distance to ambulance: sqrt(x² + y²)
+      "lanes_total":         ,  // total lanes on this road at this timestamp
+      "road_type":           ,  // highway / urban / intersection / roundabout
+      "lane_source":         ,  // "config" = from video_lanes.json, "scene_classifier" = fallback
+      "preceding_id":        ,  // ID of vehicle directly ahead in same lane
+      "following_id":        ,  // ID of vehicle directly behind in same lane
+      "left_preceding_id":   ,  // ID of vehicle ahead-left
+      "left_following_id":   ,  // ID of vehicle behind-left
+      "right_preceding_id":  ,  // ID of vehicle ahead-right
+      "right_following_id":  ,  // ID of vehicle behind-right
+      "behaviour":           ,  // normal / yielded / braked_abruptly / failed_to_yield
+      "bbox":                   // [x1, y1, x2, y2] pixels in the cropped frame
     }
   ]
 }
 ```
 
-## Note for Validation Against other Datasets
-erledigt 
+
+
+---
+
 ## Position Reliability
 
-Every vehicle observation in the JSON includes a `position_reliable` field (true or false).
-This flag tells the analysis whether the ground-plane position (x,y) for that vehicle at that second can be trusted.
-The position is computed by projecting the bottom of the YOLO bounding box onto the road plane using camera geometry. This works correctly as long as the vehicle's tyres are visible in the frame
- the formula only uses the bottom row of the box, so a vehicle whose roof is cut off at the top of the frame is still measured correctly. 
-However, three cases break the assumption: the vehicle's bottom edge is cut off by the crop (tyres not visible), 
-the vehicle's sides are clipped (the lateral centre of the visible box is not the centre of the vehicle), 
-or the computed lateral position exceeds the physical road boundary and the safety clamp fires. 
-All three are flagged position_reliable: false.
+Every observation includes `position_reliable` (true/false). The ground-plane projection uses only the bottom row of the bounding box (where tyres meet road). Three cases break this assumption and are flagged unreliable:
 
-The dominant cause in this dataset is large trucks driving directly beside the ambulance during the emergency run 
-at 5–10m distance a truck fills most of the camera frame and its sides clip the edges. 
-This is a physical constraint of a single fixed camera.
+- **Bottom clipped**: tyres below the crop — projection input missing
+- **Side clipped**: vehicle half out of frame — lateral centre of visible box is not vehicle centre
+- **Lateral clamp fired**: computed position exceeds physical road boundary
 
-On the test video (930 seconds, 3847 total vehicle-frame observations),
-the initial implementation flagged 26.3% of observations as unreliable,
-with 77.5% of close-range (0–10m) observations affected. 
-After correcting an over-strict rule that was wrongly penalising top-clipped boxes
-(whose roof is out of frame but whose tyres are fully visible and whose position
-formula is unaffected), the rate dropped to 13.8% overall and 39.3% at 0–10m.
-The remaining unreliable observations are genuinely problematic measurements 
-the RTS smoother already handles them by assigning them 25× lower measurement weight
-so the physics model dominates instead of the bad measurement.
+Top-clipped boxes (roof out of frame, tyres visible) are **reliable** — the formula only uses the bottom row.
 
-For analysis, filter on position_reliable: true before computing any spatial statistics. 
-The unreliable rows are kept in the dataset rather than deleted. 
-->RUN count_reliability.py for stats ( here is ex output )
+On the test video (930 seconds, 3847 observations):
 
-  Total observations : 3847
-  Reliable           : 3315  (86.2%)
-  Unreliable         : 532  (13.8%)
+```
+Total observations : 3847
+Reliable           : 3315  (86.2%)
+Unreliable         : 532   (13.8%)
 
-  Summary: 532/3847 observations flagged unreliable
+By distance to ego:
+  0–10m    456/1159  (39.3%)  — mainly trucks beside ambulance
+  10–20m    66/1175  ( 5.6%)
+  20–40m    10/1494  ( 0.7%)
+  40–80m     0/19    ( 0.0%)
+```
 
---- By vehicle type ---
-  bus             16/101    ( 15.8%)  ███
-  car            121/1581   (  7.7%)  █
-  truck          395/2165   ( 18.2%)  ███
+Unreliable rows are kept in the dataset (not deleted). The RTS smoother assigns them 25× lower measurement weight so the motion model interpolates instead.
 
---- By distance to ego ---
-  0-10m   (very close)    456/1159   ( 39.3%)  ███████
-  10-20m  (close)          66/1175   (  5.6%)  █
-  20-40m  (mid)            10/1494   (  0.7%)  
-  40-80m  (far)             0/19     (  0.0%)  
-  80m+    (distant)         0/0      (  0.0%)  
+When a box is clipped and the position is unreliable, the smoother ignores that measurement and fills in the gap using the vehicle's trajectory before and after that frame.
 
+---
 
+## Behaviour Labels
+
+Labels are assigned by `annotator.py` only when `emergency_active = true` and vehicle is within 50m.
+
+| Label | Condition |
+|---|---|
+| `yielded` | Lateral speed ≥ 0.5 m/s sustained for ≥ 2 consecutive frames, OR heading ≥ 15°, OR cumulative lateral drift ≥ 0.8m over 3s monotonically |
+| `braked_abruptly` | Acceleration ≤ −2.5 m/s², OR acceleration ≤ −1.5 m/s² AND jerk ≤ −3.0 m/s³ |
+| `failed_to_yield` | Within 20m, ≥ 3 frames of history, nothing else triggered |
+| `normal` | None of the above |
+
+Thresholds: Pierson et al. 2019 (lateral speed), Qiu et al. 2025 (heading), Krajewski et al. 2018 (cumulative window), braking literature (acceleration).
+
+---
 
 ## Known Limitations
 
-to be written
----
+**Speeds are relative only.** All velocities are relative to the ambulance.
+
+**EMAP ego-motion compensation is partial.** EMAP's depth signal (from Depth Anything V2) is relative, not metric. Compensation is approximate. If EMAP is not installed the pipeline falls back to standard ByteTrack silently.
 
 
 

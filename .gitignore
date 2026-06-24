@@ -1,1 +1,11 @@
-calibration_candidates/
+Depth-Anything-V2/
+EMAP/
+Ultra-Fast-Lane-Detection-v2/
+Depth-Anything-V2/
+EMAP/
+Ultra-Fast-Lane-Detection-v2/
+*.pt
+*.pth
+models/
+__pycache__/
+*.pyc

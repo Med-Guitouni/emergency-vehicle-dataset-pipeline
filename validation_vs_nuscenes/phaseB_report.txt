@@ -1,0 +1,87 @@
+
+==============================================================
+PHASE B — speed validation (relative + absolute)
+Straight = obj & ego yaw rate < 2.0 deg/s
+==============================================================
+
+[ALL reliable pairs]  n=504
+    FWD raw   mean  -0.271  MAE  3.835  RMSE  6.160  m/s   within: <=0.5  17.1%  <=1  26.6%  <=2  44.2%
+    FWD smo   mean  -1.410  MAE  3.529  RMSE  7.312  m/s   within: <=0.5  23.4%  <=1  38.7%  <=2  56.9%
+    LAT raw   mean  +0.076  MAE  0.873  RMSE  1.431  m/s   within: <=0.1  18.5%  <=0.25  34.7%  <=0.5  51.8%
+    LAT smo   mean  -0.215  MAE  0.746  RMSE  1.295  m/s   within: <=0.1  17.9%  <=0.25  38.9%  <=0.5  58.7%
+
+[STRAIGHT-LINE subset (highway-like)]  n=313
+    FWD raw   mean  -0.003  MAE  3.744  RMSE  5.829  m/s   within: <=0.5  14.7%  <=1  22.4%  <=2  42.2%
+    FWD smo   mean  -0.939  MAE  2.946  RMSE  5.918  m/s   within: <=0.5  20.8%  <=1  34.8%  <=2  56.2%
+    LAT raw   mean  -0.053  MAE  0.757  RMSE  1.170  m/s   within: <=0.1  22.7%  <=0.25  37.7%  <=0.5  55.0%
+    LAT smo   mean  -0.134  MAE  0.539  RMSE  0.884  m/s   within: <=0.1  21.7%  <=0.25  45.0%  <=0.5  68.1%
+
+  LATERAL-SPEED (smoothed):  all MAE 0.746 RMSE 1.295  |  straight MAE 0.539 RMSE 0.884  m/s
+  -> on the straight subset, 68.1% of lateral-speed noise stays AT OR UNDER the 0.5 m/s yielding threshold
+     (31.9% would exceed 0.5 m/s from noise alone on a non-yielding vehicle)
+
+  SMOOTHER IMPACT (straight subset)
+  Signal       RAW MAE   RAW RMSE   SMO MAE   SMO RMSE  reduction
+  FWD            3.744      5.829     2.946      5.918  +21.3% MAE
+  LAT            0.757      1.170     0.539      0.884  +28.7% MAE
+
+  STRAIGHT-ONLY forward error by distance (smoothed, m/s)
+  Range        N     MAE    RMSE    <=0.5    <=1    <=2
+   0-10 m      1   1.956   1.956     0.0%   0.0% 100.0%
+  10-20 m     82   2.511   3.631    12.2%  28.0%  54.9%
+  20-30 m    166   2.419   4.989    30.1%  44.6%  65.1%
+  30-40 m     64   4.885   9.476     7.8%  18.8%  34.4%
+
+  STRAIGHT-ONLY lateral error by distance (smoothed, m/s)
+  Range        N     MAE    RMSE    <=0.1  <=0.25  <=0.5
+   0-10 m      1   1.694   1.694     0.0%    0.0%   0.0%
+  10-20 m     82   0.891   1.309    13.4%   32.9%  54.9%
+  20-30 m    166   0.374   0.634    31.3%   58.4%  75.3%
+  30-40 m     64   0.501   0.732     7.8%   26.6%  67.2%
+
+  ABSOLUTE side-check (straight subset)
+    mean ego speed            : 6.63 m/s (23.9 km/h)
+    mean object absolute speed: 3.95 m/s (14.2 km/h)
+
+==============================================================
+EGO SPEED ESTIMATION — optical flow vs ego_pose ground truth
+==============================================================
+
+  [ALL pairs]  n=504
+    ego est mean 3.78  GT mean 5.73  m/s
+    error: mean -1.948  MAE 2.721  RMSE 3.888  m/s
+    within: <=0.5 17.1%  <=1 31.5%  <=2 52.8%  <=5 86.7%  m/s
+
+  [STRAIGHT subset]  n=313
+    ego est mean 3.89  GT mean 6.63  m/s
+    error: mean -2.739  MAE 3.311  RMSE 4.512  m/s
+    within: <=0.5 14.4%  <=1 24.9%  <=2 42.5%  <=5 82.1%  m/s
+
+  NOTE: nuScenes is dense urban; mean ego speed 5.7 m/s (20.6 km/h).
+  Autobahn speeds (Lyft Phase C) will stress-test higher ego speeds.
+
+==============================================================
+ABSOLUTE SPEED — relative + ego_est vs GT absolute
+absolute_forward_speed = smoothed_relative_fwd + ego_speed_est
+==============================================================
+
+[ALL pairs — absolute vs relative forward speed]  n=504
+  RELATIVE fwd (smoothed)  mean -1.410  MAE 3.529  RMSE 7.312  m/s
+  ABSOLUTE fwd (est)       mean -3.358  MAE 4.909  RMSE 8.119  m/s
+  -> Adding ego speed DEGRADED forward MAE by 1.379 m/s (worse)
+  within (relative): <=0.5 23.4%  <=1 38.7%  <=2 56.9%  m/s
+  within (absolute): <=0.5 12.1%  <=1 19.6%  <=2 37.9%  m/s
+
+[STRAIGHT subset — absolute vs relative forward speed]  n=313
+  RELATIVE fwd (smoothed)  mean -0.939  MAE 2.946  RMSE 5.918  m/s
+  ABSOLUTE fwd (est)       mean -3.678  MAE 4.844  RMSE 7.462  m/s
+  -> Adding ego speed DEGRADED forward MAE by 1.898 m/s (worse)
+  within (relative): <=0.5 20.8%  <=1 34.8%  <=2 56.2%  m/s
+  within (absolute): <=0.5 10.5%  <=1 14.1%  <=2 30.4%  m/s
+
+==============================================================
+1 Hz vs 2 Hz  —  does rate change lateral noise?
+==============================================================
+  2 Hz (0.5s step):  straight LAT MAE 0.539  RMSE 0.884   FWD MAE 2.946  RMSE 5.918   (n=313)  m/s
+  1 Hz (1.0s step):  straight LAT MAE 0.408  RMSE 0.635   FWD MAE 2.310  RMSE 3.795   (n=135)  m/s
+  If 1Hz LAT MAE is lower, switching to 2Hz would HURT the signal.

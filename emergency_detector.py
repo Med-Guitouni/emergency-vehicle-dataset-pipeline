@@ -5,7 +5,8 @@ import os
 import cv2
 
 ######################################################
-#        NOT USED ANYMORE
+#        NOT USED ANYMORE (DOCUMENTATION)
+
 ######################################################
 class EmergencyDetector:
 
