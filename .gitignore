@@ -9,3 +9,5 @@ Ultra-Fast-Lane-Detection-v2/
 models/
 __pycache__/
 *.pyc
+videos/
+.DS_Store
