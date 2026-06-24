@@ -11,3 +11,4 @@ __pycache__/
 *.pyc
 videos/
 .DS_Store
+models/
