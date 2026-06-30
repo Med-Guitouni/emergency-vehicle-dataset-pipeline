@@ -7,17 +7,18 @@
     {
       "id": 9052,
       "type": "truck",
-      "x_meters": 6.88,
-      "y_meters": 12.34,
-      "position_reliable": true,
+      "x_meters": 5.6,
+      "y_meters": 11.06,
+      "position_reliable": false,
       "speed_kmh": 0.0,
       "forward_speed_ms": 0.0,
       "lateral_speed_ms": 0.0,
       "acceleration": 0.0,
       "jerk": 0.0,
+      "ttc_to_ego": null,
       "lane_id": 3,
-      "lateral_offset": 0.42,
-      "distance_to_ego": 14.13,
+      "lateral_offset": 1.85,
+      "distance_to_ego": 12.4,
       "lanes_total": 3,
       "road_type": "highway",
       "lane_source": "config",
@@ -29,10 +30,10 @@
       "right_following_id": null,
       "behaviour": "normal",
       "bbox": [
-        1428,
-        2,
-        1917,
-        578
+        951,
+        0,
+        1278,
+        591
       ]
     }
   ]

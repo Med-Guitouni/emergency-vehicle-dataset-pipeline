@@ -1,4 +1,5 @@
 import os
+import cv2
 
 from preprocessor import VideoPreprocessor
 from detector import VehicleDetector
@@ -10,35 +11,41 @@ from scene_classifier import SceneClassifier
 from surrounding import SurroundingVehicles
 from lane_config import LaneConfig
 from smoother import RTSSmoother
+from review import run_review
 
 """
-What this pipeline does, in two phases:
+Pipeline — two phases, then an interactive review pass.
 
-PHASE 1 - COLLECT (streaming, one frame at a time at 1Hz):
-   - Crop out the sky and dashboard
-   - Run YOLO to detect vehicles, ByteTrack (+EMAP) to assign stable IDs
-   - Project each vehicle's pixel position to raw real-world metres (x, y)
-   - Flag positions from clipped bounding boxes as unreliable
-   - Classify the scene, look up lane config and emergency state
-   - Store the raw per-frame records (no metrics yet)
+PHASE 1  (streaming at 5 Hz, exporting records at 1 Hz)
+  - Crop sky and dashboard, resize to fixed 1280×720
+  - Detect vehicles (YOLOv8x), track with BoT-SORT at 5 Hz so consecutive
+    frames are only 6 video frames apart — close enough for GMC sparseOptFlow
+    and ReID to work correctly.
+  - Every 5 Hz frame: project bounding boxes to metres, feed track_obs so
+    the RTS smoother sees the full 5 Hz trajectory.
+  - Only on whole-second frames: classify scene, look up lane config and
+    emergency state, store a record for export, AND save the cropped frame
+    to review_data/frame_<timestamp>.jpg for the review UI.
 
-BETWEEN PHASES - RTS SMOOTHING:
-   Each vehicle's full raw trajectory is smoothed with a RTS
-   smoother (the same post-processing highD and INTERACTION use). This removes
-   detection jitter and pixel quantisation noise from positions BEFORE any
-   velocity/acceleration is derived from them. Unreliable (clipped-bbox)
-   measurements are down-weighted so the motion model dominates there.
+BETWEEN PHASES — RTS SMOOTHING
+  Full trajectory per vehicle smoothed with Rauch-Tung-Striebel smoother.
 
-PHASE 2 - COMPUTE + EXPORT (sequential over the stored records):
-   - Read each vehicle's SMOOTHED position
-   - Derive split velocity, longitudinal acceleration, jerk, heading (internal)
-   - Assign lane, distance, surrounding-vehicle IDs
-   - Label behaviour (normal / yielded / braked_abruptly / failed_to_yield)
-   - Write one JSON file per second to output/video_name/
+PHASE 2  (over stored 1 Hz records, after smoothing)
+  - Derive split velocity, longitudinal acceleration, jerk, TTC to ego
+  - Assign lane and surrounding-vehicle IDs from metric positions
+  - Label behaviour
+  - Write one JSON per second to output/video_name/
+
+REVIEW  (after each video's JSON is saved)
+  - Opens review.py's interactive window automatically so behaviour labels
+    and boxes can be corrected by hand before moving to the next video.
+  - Reads the frames saved during Phase 1 + the JSON written by Phase 2.
 
 Manual inputs (video_lanes.json): lane count per time window, road type,
-and emergency_start_second. Heading is internal-only (not exported).
+emergency_start_second.
 """
+
+REVIEW_DIR = "review_data"
 
 sc = SceneClassifier()
 lc = LaneConfig()
@@ -47,6 +54,8 @@ lc = LaneConfig()
 def process_video(video_path):
     video_name = os.path.splitext(os.path.basename(video_path))[0][:30]
     print(f"\nProcessing: {video_name}")
+
+    os.makedirs(REVIEW_DIR, exist_ok=True)
 
     p  = VideoPreprocessor(video_path)
     d  = VehicleDetector()
@@ -60,70 +69,73 @@ def process_video(video_path):
     sc.reset()
 
     # =================================================================
-    # PHASE 1 - collect raw tracked positions per frame
+    # PHASE 1 — track at 5 Hz, store export records at 1 Hz
     # =================================================================
-    records = []          # one entry per second
-    track_obs = {}        # track_id -> [(timestamp, x_raw, y_raw, reliable)]
+    records   = []   # one entry per whole second
+    track_obs = {}   # track_id -> [(timestamp_float, x, y, reliable)]
 
-    for item in p.extract_frames(fps=1):
-        timestamp = item["timestamp"]
-        frame_raw = item["frame"]
-        frame     = p.spatial_crop(frame_raw)
+    for item in p.stream_frames(fps=5):
+        timestamp_float  = item["timestamp"]
+        timestamp        = int(round(timestamp_float))
+        is_export_frame  = (round(timestamp_float * 5) % 5 == 0)
+
+        frame_raw    = item["frame"]
+        frame        = p.spatial_crop(frame_raw)
         frame_height, frame_width = frame.shape[:2]
 
-        ego_H, depth_map = h.process_frame(frame)
-        tracked = t.update(d.model, frame, ego_H=ego_H, depth_map=depth_map)
+        tracked = t.update(d.model, frame)
 
-        scenario_type = sc.classify(frame_raw)
-        lane_info = lc.get_lane_info(video_name, timestamp, scenario_type)
-        emergency_active, _ = lc.is_emergency_active(video_name, timestamp)
+        if is_export_frame:
+            scenario_type        = sc.classify(frame_raw)
+            lane_info            = lc.get_lane_info(video_name, timestamp, scenario_type)
+            emergency_active, _  = lc.is_emergency_active(video_name, timestamp)
+
+            # save the cropped frame for the review UI
+            frame_path = os.path.join(REVIEW_DIR, f"frame_{timestamp:04d}.jpg")
+            cv2.imwrite(frame_path, frame)
+        else:
+            lane_info = None
 
         vehicles_raw = []
         for v in tracked:
-            bbox = v["bbox"]
-
-            # position + reliability in one edge-aware call:
-            # top-clipped boxes are valid (projection uses only the bottom
-            # row), side-clipped boxes get their lateral reconstructed from
-            # the visible edge + a class width prior, only bottom-clipped /
-            # fully-spanning boxes stay unreliable. See homography.py
-            # get_vehicle_position docstring for the literature.
             x_raw, y_raw, reliable = h.get_vehicle_position(
-                bbox, v["type"], frame_width, frame_height, lane_info
+                v["bbox"], v["type"], frame_width, frame_height, lane_info
             )
 
-            vehicles_raw.append({
-                "track_id": v["track_id"],
-                "type":     v["type"],
-                "bbox":     bbox,
-                "center":   v["center"],
-                "reliable": reliable,
-            })
             track_obs.setdefault(v["track_id"], []).append(
-                (timestamp, x_raw, y_raw, reliable)
+                (timestamp_float, x_raw, y_raw, reliable)
             )
 
-        records.append({
-            "timestamp":        timestamp,
-            "scenario_type":    scenario_type,
-            "lane_info":        lane_info,
-            "emergency_active": emergency_active,
-            "frame_width":      frame_width,
-            "vehicles_raw":     vehicles_raw,
-        })
+            if is_export_frame:
+                vehicles_raw.append({
+                    "track_id": v["track_id"],
+                    "type":     v["type"],
+                    "bbox":     v["bbox"],
+                    "reliable": reliable,
+                })
 
-        if timestamp % 60 == 0:
-            print(f"  [phase 1] t={timestamp}s - {len(vehicles_raw)} vehicles"
-                  f" - emergency={emergency_active}")
+        if is_export_frame:
+            records.append({
+                "timestamp":        timestamp,
+                "scenario_type":    scenario_type,
+                "lane_info":        lane_info,
+                "emergency_active": emergency_active,
+                "frame_width":      frame_width,
+                "vehicles_raw":     vehicles_raw,
+            })
+
+            if timestamp % 60 == 0:
+                print(f"  [phase 1] t={timestamp}s  {len(vehicles_raw)} vehicles"
+                      f"  emergency={emergency_active}")
 
     # =================================================================
-    # RTS SMOOTHING - per track, over the full video
+    # RTS SMOOTHING — per track, over the full video
     # =================================================================
     print(f"  [smoothing] {len(track_obs)} tracks...")
     smoothed = sm.smooth(track_obs)
 
     # =================================================================
-    # PHASE 2 - metrics from smoothed positions, annotate, export
+    # PHASE 2 — metrics from smoothed positions, annotate, export
     # =================================================================
     all_frames_data = []
     last_seen = {}   # track_id -> last timestamp, for correct dt across gaps
@@ -132,37 +144,31 @@ def process_video(video_path):
         timestamp        = rec["timestamp"]
         lane_info        = rec["lane_info"]
         emergency_active = rec["emergency_active"]
-        frame_width      = rec["frame_width"]
 
         vehicles = []
         for vr in rec["vehicles_raw"]:
-            tid    = vr["track_id"]
-            center = vr["center"]
+            tid = vr["track_id"]
 
-            # smoothed position (falls back to raw for very short tracks)
             x_m, y_m = smoothed[tid][timestamp]
 
-            # real time since this track was last seen (handles gaps)
             dt = max(timestamp - last_seen.get(tid, timestamp - 1), 1)
             last_seen[tid] = timestamp
 
             forward_speed, lateral_speed, speed = h.estimate_relative_velocity(
                 tid, x_m, y_m, dt
             )
-            # longitudinal acceleration (change in forward speed) - highD style
             acceleration = h.estimate_acceleration(tid, forward_speed, dt)
             jerk         = h.estimate_jerk(tid, acceleration, dt)
-            heading      = h.estimate_heading(tid, x_m, y_m)  # internal only
 
             distance_to_ego = h.estimate_distance_to_ego(x_m, y_m)
-            lane_id         = h.estimate_lane_id(center[0], frame_width, lane_info)
-            lateral_offset  = h.estimate_lateral_offset(center[0], frame_width, lane_info)
+            ttc_to_ego      = h.estimate_ttc_to_ego(y_m, forward_speed)
+            lane_id         = h.estimate_lane_id(x_m, lane_info)
+            lateral_offset  = h.estimate_lateral_offset(x_m, lane_info)
 
             vehicles.append({
                 "track_id":          tid,
                 "type":              vr["type"],
                 "bbox":              vr["bbox"],
-                "center":            center,
                 "x_meters":          x_m,
                 "y_meters":          y_m,
                 "position_reliable": vr["reliable"],
@@ -171,7 +177,7 @@ def process_video(video_path):
                 "lateral_speed_ms":  lateral_speed,
                 "acceleration":      acceleration,
                 "jerk":              jerk,
-                "heading_angle":     heading,
+                "ttc_to_ego":        ttc_to_ego,
                 "lane_id":           lane_id,
                 "lateral_offset":    lateral_offset,
                 "distance_to_ego":   distance_to_ego,
@@ -196,20 +202,33 @@ def process_video(video_path):
             print(f"  [phase 2] t={timestamp}s exported")
 
     e.save_batch(all_frames_data, video_name)
+
+    # =================================================================
+    # REVIEW — opens automatically once this video's JSON is on disk
+    # =================================================================
+    run_review(video_name)
+
     return all_frames_data
 
 
 if __name__ == "__main__":
-    videos = [f"videos/{v}" for v in os.listdir("videos") if v.endswith(".mp4")]
+    videos = sorted([f"videos/{v}" for v in os.listdir("videos") if v.endswith(".mp4")])
     print(f"Found {len(videos)} videos")
+
     for video in videos:
+        video_name = os.path.splitext(os.path.basename(video))[0][:30]
+        json_dir   = os.path.join("output", video_name)
+
+        # skip videos that already have JSON output — lets you quit and
+        # relaunch without reprocessing finished videos. Note: if a video
+        # was interrupted mid-processing, its partial JSON dir will exist
+        # but be incomplete — delete that folder manually before relaunch
+        # if you want it redone from scratch.
+        if os.path.exists(json_dir) and os.listdir(json_dir):
+            print(f"Skipping {video_name} — already processed "
+                  f"({len(os.listdir(json_dir))} JSON files found)")
+            continue
+
         process_video(video)
+
     print("\nDone.")
-
-# Test script - verifies emergency detection across first 60 seconds
-# Run: python3 test_emergency.py
-
-# Test script - verifies lateral offset detection across first 25 seconds
-# Run: python3 test_lateral.py
-
-

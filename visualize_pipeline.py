@@ -2,16 +2,19 @@
 visualize_pipeline.py
 
 Reads the JSON output produced by main.py and the original video,
-then renders every second of the video as an annotated frame showing
-exactly what the pipeline measured — no recomputation.
+then renders every second as an annotated frame showing exactly what
+the pipeline measured — no recomputation.
 
 Layout:
   LEFT  = cropped video frame with metric grid + vehicle boxes
   RIGHT = info panel listing every vehicle sorted by distance to ego
 
 Box colours:
-  GREEN = position_reliable True
-  RED   = position_reliable False
+  GREEN      = yielded
+  RED        = any other behaviour (normal / braked_abruptly / failed_to_yield)
+  Dim border = position_reliable False (dashed look via thinner line)
+
+TTC displayed on each box when available (vehicles ahead + closing only).
 
 Output folder: pipeline_visualization/
 One jpg per second covering the full video duration.
@@ -26,39 +29,33 @@ import numpy as np
 
 from preprocessor import VideoPreprocessor
 from homography import HomographyEstimator
-from lane_config import LaneConfig
 
 # ------------------------------------------------------------------ config ---
 OUTPUT_DIR = "pipeline_visualization"
-PANEL_W    = 320   # width of the right info panel in pixels
+PANEL_W    = 340
 
 FWD_GRID_M = [5, 10, 20, 30, 50, 75, 100]
 LAT_GRID_M = [-10.5, -7.0, -3.5, 0.0, 3.5, 7.0, 10.5]
 
-COL_RELIABLE   = (0, 220, 0)
-COL_UNRELIABLE = (0, 0, 255)
-COL_YIELDED    = (0, 220, 255)
-COL_BRAKED     = (0, 100, 255)
-COL_FAILED     = (0, 0, 180)
+COL_YIELDED    = (0, 220, 0)    # green  — yielded
+COL_OTHER      = (0, 0, 220)    # red    — normal / braked / failed
+COL_UNRELIABLE = (80, 80, 80)   # dark grey border when position unreliable
 GRID_COL       = (255, 200, 0)
 AXIS_COL       = (0, 255, 255)
 PANEL_BG       = (20, 20, 20)
 TEXT_COL       = (220, 220, 220)
 
-BEHAVIOUR_COLS = {
-    "yielded":         COL_YIELDED,
-    "braked_abruptly": COL_BRAKED,
-    "failed_to_yield": COL_FAILED,
-    "normal":          None,   # use reliability colour
-}
+
+def box_colour(v):
+    """Green for yielded, red for everything else."""
+    if v.get("behaviour") == "yielded":
+        return COL_YIELDED
+    return COL_OTHER
 
 
-def behaviour_colour(v):
-    b = v.get("behaviour", "normal")
-    override = BEHAVIOUR_COLS.get(b)
-    if override:
-        return override
-    return COL_RELIABLE if v.get("position_reliable", True) else COL_UNRELIABLE
+def box_thickness(v):
+    """Thinner border signals an unreliable position measurement."""
+    return 1 if not v.get("position_reliable", True) else 2
 
 
 def project_to_pixel(x_m, y_m, f, cx, horizon_row, cam_h):
@@ -108,79 +105,106 @@ def draw_grid(vis, f, cx, fh, horizon_row, cam_h):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.34, AXIS_COL, 1)
 
 
+def draw_vehicles(vis, vehicles):
+    for v in vehicles:
+        bbox = v.get("bbox")
+        if not bbox:
+            continue
+        x1, y1, x2, y2 = bbox
+        col   = box_colour(v)
+        thick = box_thickness(v)
+
+        cv2.rectangle(vis, (x1, y1), (x2, y2), col, thick)
+
+        # dot at bottom-centre (the projection input pixel)
+        bcx = int((x1 + x2) / 2)
+        cv2.circle(vis, (bcx, y2), 3, col, -1)
+
+        # top label: ID + behaviour abbreviation
+        beh = v.get("behaviour", "normal")
+        beh_short = "" if beh == "normal" else f" {beh[:3].upper()}"
+        top_label = f"id{v['id']}{beh_short}"
+        cv2.putText(vis, top_label, (x1 + 2, y1 - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, col, 1)
+
+        # bottom label: TTC when available
+        ttc = v.get("ttc_to_ego")
+        if ttc is not None:
+            ttc_label = f"TTC {ttc:.1f}s"
+            cv2.putText(vis, ttc_label, (x1 + 2, y2 + 11),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 200, 255), 1)
+
+
 def draw_panel(data, vehicles_sorted, fh):
     panel = np.full((fh, PANEL_W, 3), PANEL_BG, dtype=np.uint8)
 
-    # scene-level info at the top
-    ego_spd = data.get("ego_speed_ms")
-    ego_str = f"{ego_spd:.1f} m/s ({ego_spd*3.6:.0f} km/h)" if ego_spd else "n/a"
     scene_type = data.get("scenario_type", "?")
-
     cv2.putText(panel, f"scene: {scene_type}", (6, 14),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 60), 1)
-    cv2.putText(panel, f"ego:   {ego_str}", (6, 26),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 60), 1)
-    cv2.line(panel, (4, 32), (PANEL_W - 4, 32), (80, 80, 80), 1)
+    cv2.line(panel, (4, 20), (PANEL_W - 4, 20), (80, 80, 80), 1)
 
-    cv2.putText(panel, "ID   type  x      y     spd    beh",
-                (6, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (160, 160, 60), 1)
-    cv2.line(panel, (4, 48), (PANEL_W - 4, 48), (60, 60, 60), 1)
+    # column header
+    cv2.putText(panel, "ID   type  x      y    spd   TTC    beh",
+                (6, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (160, 160, 60), 1)
+    cv2.line(panel, (4, 36), (PANEL_W - 4, 36), (60, 60, 60), 1)
 
     row_h = 13
-    y_cur = 60
+    y_cur = 48
     for v in vehicles_sorted:
-        if y_cur + row_h > fh:
+        if y_cur + row_h > fh - 30:
             break
-        col = behaviour_colour(v)
+        col = box_colour(v)
         beh = v.get("behaviour", "normal")[:3]
+        ttc = v.get("ttc_to_ego")
+        ttc_str = f"{ttc:5.1f}s" if ttc is not None else "  -- "
         line = (f"id{v['id']:<3} {v['type'][:3]:<4}"
                 f" {v['x_meters']:+5.1f}"
                 f" {v['y_meters']:5.1f}"
                 f" {v['speed_kmh']:5.1f}"
+                f" {ttc_str}"
                 f" {beh}")
         cv2.putText(panel, line, (6, y_cur),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.30, col, 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, col, 1)
         y_cur += row_h
 
-    # legend at bottom
-    legend_y = fh - 50
+    # legend
+    legend_y = fh - 28
     cv2.line(panel, (4, legend_y), (PANEL_W - 4, legend_y), (60, 60, 60), 1)
     items = [
-        (COL_RELIABLE,   "reliable"),
-        (COL_UNRELIABLE, "unreliable"),
         (COL_YIELDED,    "yielded"),
-        (COL_BRAKED,     "braked"),
-        (COL_FAILED,     "failed"),
+        (COL_OTHER,      "normal / braked / failed"),
+        (COL_UNRELIABLE, "position unreliable (thin border)"),
+        ((0, 200, 255),  "TTC = seconds to reach ego"),
     ]
     for i, (c, label) in enumerate(items):
-        y = legend_y + 10 + i * 10
-        cv2.rectangle(panel, (6, y - 6), (14, y + 2), c, -1)
-        cv2.putText(panel, label, (18, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, TEXT_COL, 1)
+        y = legend_y + 8 + i * 9
+        if y > fh - 2:
+            break
+        cv2.rectangle(panel, (6, y - 5), (13, y + 2), c, -1)
+        cv2.putText(panel, label, (17, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.26, TEXT_COL, 1)
 
     return panel
 
 
 # ------------------------------------------------------------------ setup ---
-videos = [f"videos/{v}" for v in os.listdir("videos") if v.endswith(".mp4")]
+videos = sorted([f"videos/{v}" for v in os.listdir("videos") if v.endswith(".mp4")])
 if not videos:
     raise SystemExit("No video found in videos/")
 
-video_path = sorted(videos)[0]
+video_path = videos[0]
 video_name = os.path.splitext(os.path.basename(video_path))[0][:30]
 json_dir   = os.path.join("output", video_name)
 
 if not os.path.exists(json_dir):
     raise SystemExit(f"No JSON output at {json_dir}/ — run main.py first.")
 
-# count available JSON files to know the full duration
-json_files = sorted([f for f in os.listdir(json_dir) if f.endswith(".json")])
+json_files    = sorted([f for f in os.listdir(json_dir) if f.endswith(".json")])
 total_seconds = len(json_files)
 print(f"Video:      {video_path}")
 print(f"JSON dir:   {json_dir}/ ({total_seconds} seconds)")
 print(f"Output dir: {OUTPUT_DIR}/")
 
-# clean and create output folder
 if os.path.exists(OUTPUT_DIR):
     for f in os.listdir(OUTPUT_DIR):
         if f.endswith((".jpg", ".png")):
@@ -195,7 +219,7 @@ foc_factor = h.focal_length_factor
 hor_ratio  = h.horizon_ratio
 cx_ratio   = h.CX_RATIO
 
-print(f"\nRendering all {total_seconds} seconds...")
+print(f"\nRendering {total_seconds} seconds...")
 
 saved = 0
 for item in p.extract_frames(fps=1):
@@ -217,39 +241,17 @@ for item in p.extract_frames(fps=1):
 
     vis = frame.copy()
     draw_grid(vis, f_px, cx, fh, horizon_row, cam_h)
+    draw_vehicles(vis, data.get("vehicles", []))
 
     emergency = data.get("emergency_active", False)
     emg_col   = (0, 0, 255) if emergency else (255, 255, 255)
     cv2.putText(vis,
-                f"t={timestamp}s  "
-                f"emergency={'YES' if emergency else 'no'}  "
-                f"[pipeline output]",
+                f"t={timestamp}s  emergency={'YES' if emergency else 'no'}",
                 (5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.40, emg_col, 1)
 
-    vehicles = data.get("vehicles", [])
-    vehicles_sorted = sorted(vehicles,
+    vehicles_sorted = sorted(data.get("vehicles", []),
                              key=lambda v: v.get("distance_to_ego", 999))
-
-    for v in vehicles:
-        bbox = v.get("bbox")
-        if not bbox:
-            continue
-        x1, y1, x2, y2 = bbox
-        col = behaviour_colour(v)
-
-        cv2.rectangle(vis, (x1, y1), (x2, y2), col, 2)
-
-        # dot at bottom-centre (the projection input pixel)
-        bcx = int((x1 + x2) / 2)
-        cv2.circle(vis, (bcx, y2), 3, col, -1)
-
-        # ID + behaviour label on box
-        beh = v.get("behaviour", "normal")
-        label = f"id{v['id']}" if beh == "normal" else f"id{v['id']} {beh[:3]}"
-        cv2.putText(vis, label, (x1 + 2, y1 - 3),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, col, 1)
-
-    panel   = draw_panel(data, vehicles_sorted, fh)
+    panel    = draw_panel(data, vehicles_sorted, fh)
     combined = np.hstack([vis, panel])
 
     out_path = os.path.join(OUTPUT_DIR, f"t{timestamp:04d}.jpg")
@@ -260,4 +262,4 @@ for item in p.extract_frames(fps=1):
         print(f"  {saved}/{total_seconds} frames saved...")
 
 print(f"\nDone. {saved} frames saved to {OUTPUT_DIR}/")
-print("GREEN=reliable  RED=unreliable  YELLOW=yielded  ORANGE=braked  DARK RED=failed")
+print("GREEN = yielded   RED = other   TTC shown in cyan above box bottom")

@@ -5,19 +5,20 @@
   "scenario_type": "highway",
   "vehicles": [
     {
-      "id": 9852,
+      "id": 10866,
       "type": "truck",
-      "x_meters": 7.48,
-      "y_meters": 34.07,
+      "x_meters": 5.21,
+      "y_meters": 23.55,
       "position_reliable": true,
       "speed_kmh": 0.0,
       "forward_speed_ms": 0.0,
       "lateral_speed_ms": 0.0,
       "acceleration": 0.0,
       "jerk": 0.0,
-      "lane_id": 2,
-      "lateral_offset": 1.44,
-      "distance_to_ego": 34.88,
+      "ttc_to_ego": null,
+      "lane_id": 3,
+      "lateral_offset": 1.46,
+      "distance_to_ego": 24.12,
       "lanes_total": 3,
       "road_type": "highway",
       "lane_source": "config",
@@ -29,10 +30,10 @@
       "right_following_id": null,
       "behaviour": "normal",
       "bbox": [
-        1152,
-        315,
-        1260,
-        478
+        768,
+        325,
+        837,
+        488
       ]
     }
   ]

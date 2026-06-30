@@ -5,19 +5,20 @@
   "scenario_type": "highway",
   "vehicles": [
     {
-      "id": 9899,
+      "id": 10949,
       "type": "car",
-      "x_meters": 4.46,
-      "y_meters": 7.04,
+      "x_meters": 2.3,
+      "y_meters": 4.67,
       "position_reliable": false,
       "speed_kmh": 0.0,
       "forward_speed_ms": 0.0,
       "lateral_speed_ms": 0.0,
       "acceleration": 0.0,
       "jerk": 0.0,
+      "ttc_to_ego": null,
       "lane_id": 3,
-      "lateral_offset": 1.04,
-      "distance_to_ego": 8.33,
+      "lateral_offset": -1.45,
+      "distance_to_ego": 5.21,
       "lanes_total": 3,
       "road_type": "highway",
       "lane_source": "config",
@@ -29,10 +30,10 @@
       "right_following_id": null,
       "behaviour": "normal",
       "bbox": [
-        1635,
-        453,
-        1919,
-        696
+        1090,
+        465,
+        1279,
+        719
       ]
     }
   ]

@@ -10,5 +10,19 @@
         "notes": "A2 Autobahn, 3 lanes, verified by visual inspection"
       }
     ]
+  },
+  "video1": {
+    "emergency_start_second": 0,
+    "lanes": [
+      {
+        "from_second": 0,
+        "to_second": 270,
+        "lanes": 3,
+        "road_type": "highway",
+        "notes": "highway, 3 lanes, full clip"
+      }
+    ]
   }
+
 }
+
