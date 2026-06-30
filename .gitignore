@@ -12,3 +12,6 @@ __pycache__/
 videos/
 .DS_Store
 models/
+pipeline_visualization/
+review_data/
+videos/
