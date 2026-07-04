@@ -11,7 +11,7 @@ from scene_classifier import SceneClassifier
 from surrounding import SurroundingVehicles
 from lane_config import LaneConfig
 from smoother import RTSSmoother
-from review import run_review
+from intermediate_review import run_intermediate_review
 
 """
 Pipeline — two phases, then an interactive review pass.
@@ -36,10 +36,11 @@ PHASE 2  (over stored 1 Hz records, after smoothing)
   - Label behaviour
   - Write one JSON per second to output/video_name/
 
-REVIEW  (after each video's JSON is saved)
-  - Opens review.py's interactive window automatically so behaviour labels
-    and boxes can be corrected by hand before moving to the next video.
-  - Reads the frames saved during Phase 1 + the JSON written by Phase 2.
+INTERMEDIATE REVIEW (after Phase 1, before smoothing)
+  - Opens an interactive window to correct, add, or delete tracked objects
+    for each 1Hz frame.
+  - Changes are applied to the raw tracking data before smoothing and metric
+    calculation, ensuring all fields are correctly populated for all objects.
 
 Manual inputs (video_lanes.json): lane count per time window, road type,
 emergency_start_second.
@@ -77,7 +78,7 @@ def process_video(video_path):
     for item in p.stream_frames(fps=5):
         timestamp_float  = item["timestamp"]
         timestamp        = int(round(timestamp_float))
-        is_export_frame  = (round(timestamp_float * 5) % 5 == 0)
+        is_export_frame  = (round(timestamp_float * 5) % 5 == 0) or (round(timestamp_float * 5) % 5 == 4) # saving first and last frame of 5 fps tracking
 
         frame_raw    = item["frame"]
         frame        = p.spatial_crop(frame_raw)
@@ -127,6 +128,13 @@ def process_video(video_path):
             if timestamp % 60 == 0:
                 print(f"  [phase 1] t={timestamp}s  {len(vehicles_raw)} vehicles"
                       f"  emergency={emergency_active}")
+
+    # =================================================================
+    # INTERMEDIATE REVIEW — correct raw tracks before smoothing
+    # =================================================================
+    print(f"  [review] launching intermediate review for {len(records)} frames...")
+    track_obs, records = run_intermediate_review(
+        video_name, track_obs, records, h)
 
     # =================================================================
     # RTS SMOOTHING — per track, over the full video
@@ -188,8 +196,8 @@ def process_video(video_path):
 
         sv.assign(vehicles, lane_info)
 
-        for v in vehicles:
-            v["behaviour"] = a.annotate(v, emergency_active)
+        #for v in vehicles:
+        #    v["behaviour"] = a.annotate(v, emergency_active)
 
         all_frames_data.append({
             "timestamp":        timestamp,
@@ -202,11 +210,6 @@ def process_video(video_path):
             print(f"  [phase 2] t={timestamp}s exported")
 
     e.save_batch(all_frames_data, video_name)
-
-    # =================================================================
-    # REVIEW — opens automatically once this video's JSON is on disk
-    # =================================================================
-    run_review(video_name)
 
     return all_frames_data
 
