@@ -78,7 +78,7 @@ def process_video(video_path):
     for item in p.stream_frames(fps=5):
         timestamp_float  = item["timestamp"]
         timestamp        = int(round(timestamp_float))
-        is_export_frame  = (round(timestamp_float * 5) % 5 == 0) or (round(timestamp_float * 5) % 5 == 4) # saving first and last frame of 5 fps tracking
+        is_export_frame  = (round(timestamp_float * 5) % 5 == 0)
 
         frame_raw    = item["frame"]
         frame        = p.spatial_crop(frame_raw)
@@ -196,8 +196,8 @@ def process_video(video_path):
 
         sv.assign(vehicles, lane_info)
 
-        #for v in vehicles:
-        #    v["behaviour"] = a.annotate(v, emergency_active)
+        for v in vehicles:
+            v["behaviour"] = a.annotate(v, emergency_active)
 
         all_frames_data.append({
             "timestamp":        timestamp,
