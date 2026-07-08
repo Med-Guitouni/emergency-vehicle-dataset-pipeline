@@ -289,7 +289,7 @@ def run_intermediate_review(video_name, track_obs, records, h_estimator):
     while 0 <= idx < len(records):
         record = records[idx]
         timestamp = record["timestamp"]
-        frame_path = os.path.join(REVIEW_DIR, f"frame_{timestamp:04d}.jpg")
+        frame_path = os.path.join(REVIEW_DIR, video_name, f"frame_{timestamp:04d}.jpg")
 
         if not os.path.exists(frame_path):
             print(f"  [review] t={timestamp}s: frame image not found, skipping")
@@ -327,8 +327,8 @@ def save_json(path, data):
 def get_json_path(video_name, timestamp):
     return os.path.join(OUTPUT_DIR, video_name, f"t{timestamp:04d}.json")
 
-def get_frame_path(timestamp):
-    return os.path.join(REVIEW_DIR, f"frame_{timestamp:04d}.jpg")
+def get_frame_path(video_name, timestamp):
+    return os.path.join(REVIEW_DIR, video_name, f"frame_{timestamp:04d}.jpg")
 
 def _render_final(frame, state, timestamp, emergency):
     """Renders a frame for the final review mode."""
@@ -509,7 +509,7 @@ def run_final_review(video_name):
     idx = 0
     while 0 <= idx < len(timestamps):
         ts = timestamps[idx]
-        json_path, frame_path = get_json_path(video_name, ts), get_frame_path(ts)
+        json_path, frame_path = get_json_path(video_name, ts), get_frame_path(video_name, ts)
         if not os.path.exists(json_path) or not os.path.exists(frame_path):
             idx += 1; continue
         json_data, frame = load_json(json_path), cv2.imread(frame_path)

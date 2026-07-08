@@ -67,7 +67,7 @@ class VehicleTracker:
         aB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
         return inter / float(aA + aB - inter)
 
-    def _detect_edge_vehicles(self, model, frame, existing_tracked):
+    def _detect_edge_vehicles(self, model, frame, existing_tracked, device):
         """
         Detect vehicles in the left and right 40% strips of the frame.
 
@@ -81,7 +81,7 @@ class VehicleTracker:
         """
         fh, fw = frame.shape[:2]
         STRIP_W = int(fw * 0.40)
-        CONF = 0.20
+        CONF = 0.2
         IOU_THR_EXISTING = 0.30
         IOU_THR_PREV = 0.25
 
@@ -96,7 +96,7 @@ class VehicleTracker:
 
         for _, x_start, x_end in strips:
             strip = frame[:, x_start:x_end]
-            results = model.predict(strip, verbose=False, conf=CONF)[0]
+            results = model.predict(strip, verbose=False, conf=CONF, device=device)[0]
 
             for box in results.boxes:
                 class_id = int(box.cls[0])
@@ -139,12 +139,13 @@ class VehicleTracker:
         ]
         return supplemental
 
-    def update(self, model, frame):
+    def update(self, model, frame, device="cpu"):
         """
         Run one tracking step on the current frame.
 
         model: loaded YOLOv8 model from detector.py
         frame: spatially cropped BGR frame
+        device: The compute device to use ('cpu', 'cuda', 'mps').
 
         Returns list of dicts, one per tracked vehicle:
             track_id, type, bbox [x1,y1,x2,y2], center [cx,cy]
@@ -152,6 +153,7 @@ class VehicleTracker:
         results = model.track(
             frame,
             tracker="botsort.yaml",
+            device=device,
             persist=True,
             verbose=False,
         )[0]
@@ -165,8 +167,8 @@ class VehicleTracker:
             class_id = int(box.cls[0])
             if class_id not in VEHICLE_CLASSES:
                 continue
-            if float(box.conf[0]) < 0.25:
-                continue
+            #if float(box.conf[0]) < 0.25:
+            #    continue
 
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             tracked.append({
@@ -176,7 +178,6 @@ class VehicleTracker:
                 "center":   [(x1 + x2) // 2, (y1 + y2) // 2],
             })
 
-        edge_detections = self._detect_edge_vehicles(model, frame, tracked)
-        tracked.extend(edge_detections)
+        #edge_detections = self._detect_edge_vehicles(model, frame, tracked, device)
+        #tracked.extend(edge_detections)
         return tracked
-
