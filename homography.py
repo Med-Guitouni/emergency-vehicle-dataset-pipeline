@@ -58,6 +58,35 @@ class HomographyEstimator:
     SHOULDER_METERS = 3.0       # hard shoulder / Standstreifen beyond outermost lane
     CX_RATIO = 0.47             # optical centre column as fraction of frame width
 
+    # NEAR-HORIZON: GROUND-PLANE PROJECTION IS UNSTABLE, SWITCH ESTIMATORS
+    # y_forward = camera_height*f / delta_y has derivative -camera_height*f/delta_y^2,
+    # so relative error in y_forward ≈ (relative error in delta_y). A small
+    # absolute jitter in delta_y (detection edge wobble, see smoother.py's
+    # "a few pixels" characterisation) produces a LARGE relative error in
+    # y_forward once delta_y itself is small. Verified against real output
+    # (compare_distance_estimators.py): a box-height-based estimate is ~2.4x
+    # more frame-to-frame stable than ground-plane for exactly these
+    # vehicles, since box height has no such small-denominator singularity.
+    # Below NEAR_HORIZON_MIN_DELTA_PX, y_forward switches to
+    #     y_forward_alt = VEHICLE_HEIGHTS_M[type] * f / box_height_px
+    # instead of being computed (badly) from the ground-plane formula.
+    # ASSUMED_JITTER_PX / MAX_RELATIVE_Y_ERROR is the same derivation used
+    # for both thresholds -- the relative-error formula has the same shape
+    # for either denominator (delta_y or box_height_px), so the same
+    # tolerance assumption gives the same numeric threshold for both.
+    ASSUMED_JITTER_PX     = 3.0    # px, "a few pixels" per smoother.py
+    MAX_RELATIVE_Y_ERROR  = 0.15   # tolerate up to 15% relative y_forward error
+    NEAR_HORIZON_MIN_DELTA_PX = ASSUMED_JITTER_PX / MAX_RELATIVE_Y_ERROR  # = 20px
+
+    # assumed real-world vehicle heights (m) for the box-height estimator --
+    # same assumption set validated in compare_distance_estimators.py
+    VEHICLE_HEIGHTS_M = {
+        "car":        1.5,
+        "truck":      3.5,
+        "bus":        3.0,
+        "motorcycle": 1.2,
+    }
+
     def __init__(self, camera_height=1.4, focal_length_factor=0.72,
                  horizon_ratio=0.60):
         self.camera_height = camera_height
@@ -76,12 +105,25 @@ class HomographyEstimator:
         self.prev_speeds = {}
         self.prev_accelerations = {}
 
+        # per-track calibrated real-world height (m) for the near-horizon
+        # box-height estimator -- see get_vehicle_position's calibration
+        # logic. Falls back to VEHICLE_HEIGHTS_M's generic per-type constant
+        # until a track has at least one trustworthy near-boundary
+        # ground-plane frame to calibrate from.
+        self.calibrated_heights = {}
+
     # ------------------------------------------------------------------
     # POSITION — ground-plane pinhole projection
     # ------------------------------------------------------------------
 
+    # Calibration zone: ground-plane frames within this multiple of
+    # NEAR_HORIZON_MIN_DELTA_PX (but still outside it, i.e. still reliable)
+    # are used to calibrate a track's own effective height, rather than
+    # frames from very close up where box proportions/perspective differ.
+    CALIBRATION_ZONE_MULTIPLIER = 3.0  # = up to 60px from the boundary
+
     def get_vehicle_position(self, bbox, vehicle_type, frame_width,
-                             frame_height, lane_info=None):
+                             frame_height, lane_info=None, track_id=None):
         """
         Project a vehicle's bounding box onto the road plane.
         Returns (x_meters, y_meters, position_reliable).
@@ -92,6 +134,31 @@ class HomographyEstimator:
                          RTS smoother interpolate → UNRELIABLE.
           BOTTOM CLIPPED — projection input missing → UNRELIABLE.
           LATERAL CLAMP FIRED — physically impossible value → UNRELIABLE.
+          NEAR HORIZON — ground-plane projection switches to a box-height
+                         estimate instead (see NEAR_HORIZON_MIN_DELTA_PX
+                         above). Still flagged UNRELIABLE even though the
+                         box-height estimate is empirically far more stable
+                         (compare_distance_estimators.py: ~2.4x less
+                         frame-to-frame jitter) — stability was validated,
+                         absolute accuracy was not. Keeping the flag lets
+                         the smoother continue leaning on its motion model
+                         here rather than fully trusting even the improved
+                         measurement.
+
+        PER-TRACK HEIGHT CALIBRATION (accuracy, not just stability)
+        VEHICLE_HEIGHTS_M is a population-level constant per vehicle type --
+        a real SUV isn't the same height as a real sedan, so it's a source
+        of systematic bias the stability validation didn't measure. Many
+        vehicles enter the near-horizon zone by RECEDING, meaning we often
+        have a trustworthy ground-plane reading of that SAME vehicle right
+        before it crosses into the unstable zone. Whenever a track has a
+        reliable ground-plane frame within CALIBRATION_ZONE_MULTIPLIER of
+        the boundary, this vehicle's own effective height is back-solved
+        from that frame's (trusted) y_forward and box_height_px, and used
+        for its own subsequent near-horizon frames instead of the generic
+        constant. Tracks with no such frame (near-horizon from their first
+        observation) fall back to VEHICLE_HEIGHTS_M as before. track_id=None
+        (caller doesn't have one) also falls back, unconditionally.
 
         x_meters: + = right of ambulance centre, − = left
         y_meters: distance ahead (always ≥ 0, larger = further)
@@ -115,14 +182,32 @@ class HomographyEstimator:
                        if self.override_horizon_row is not None
                        else self.horizon_ratio * frame_height)
 
-        delta_y  = y2 - horizon_row
-        min_delta = (self.camera_height * f) / self.MAX_FORWARD_METERS
-        if delta_y < min_delta:
-            delta_y = min_delta
-        y_forward = (self.camera_height * f) / delta_y
-        if y_forward > self.MAX_FORWARD_METERS:
-            y_forward = self.MAX_FORWARD_METERS
+        delta_y_raw = y2 - horizon_row
+        near_horizon = delta_y_raw < self.NEAR_HORIZON_MIN_DELTA_PX
+        box_height_px = max(y2 - y1, 1e-6)
 
+        if near_horizon:
+            # ground-plane is unstable this close to the horizon -- use
+            # box-height instead (no delta_y-style singularity). Prefer this
+            # track's own calibrated height if we have one (see docstring).
+            if track_id is not None and track_id in self.calibrated_heights:
+                h_real = self.calibrated_heights[track_id]
+            else:
+                h_real = self.VEHICLE_HEIGHTS_M.get(vehicle_type, self.VEHICLE_HEIGHTS_M["car"])
+            y_forward = (h_real * f) / box_height_px
+            if y_forward > self.MAX_FORWARD_METERS:
+                y_forward = self.MAX_FORWARD_METERS
+        else:
+            min_delta = (self.camera_height * f) / self.MAX_FORWARD_METERS
+            delta_y = delta_y_raw
+            if delta_y < min_delta:
+                delta_y = min_delta
+            y_forward = (self.camera_height * f) / delta_y
+            if y_forward > self.MAX_FORWARD_METERS:
+                y_forward = self.MAX_FORWARD_METERS
+
+        # x_lateral from similar triangles -- this relation is general and
+        # doesn't depend on which estimator produced y_forward above
         x_lateral = ((x1 + x2) / 2.0 - cx) * y_forward / f
 
         # lateral plausibility clamp (lane-aware)
@@ -140,7 +225,17 @@ class HomographyEstimator:
             x_lateral = -max_lateral
             clamped = True
 
-        reliable = not bottom_clipped and not side_clipped and not clamped
+        reliable = (not bottom_clipped and not side_clipped
+                    and not clamped and not near_horizon)
+
+        # CALIBRATION: a trustworthy ground-plane frame within the
+        # calibration zone gives us this specific vehicle's own effective
+        # height -- store it for this track's future near-horizon frames,
+        # replacing the generic per-type constant. Overwritten each
+        # qualifying frame (most recent calibration wins).
+        if (track_id is not None and reliable and not near_horizon
+                and delta_y_raw <= self.NEAR_HORIZON_MIN_DELTA_PX * self.CALIBRATION_ZONE_MULTIPLIER):
+            self.calibrated_heights[track_id] = (y_forward * box_height_px) / f
 
         return (round(float(x_lateral), 2),
                 round(float(y_forward), 2),

@@ -3,15 +3,28 @@ import numpy as np
 
 class HeuristicAnnotator:
     """
-    Labels each vehicle's behaviour per frame when emergency is active.
-    Labels: normal / braked_abruptly / yielded / failed_to_yield
+     ─────────────────────────────────────────────────────────────────────────
 
-    INPUT QUALITY: positions are RTS-smoothed (smoother.py) before any metric
-    reaches here. Acceleration is LONGITUDINAL (change in signed forward speed,
-    highD-style), so the braking threshold is physically meaningful.
+
+
+
+
+
+    Outdated : thresholds need recalibration if we want automatic use .
+                Manual review will replace it
+
+
+
+
+
+
+
+
 
     ─────────────────────────────────────────────────────────────────────────
-    BRAKING RULES (take priority over yield rules)
+
+    ─────────────────────────────────────────────────────────────────────────
+    BRAKING RULES (take priority over yield rules-manual review cant detect barking)
     ─────────────────────────────────────────────────────────────────────────
     BRAKE     — acceleration ≤ −2.5 m/s²
                 (converging value across braking literature)
@@ -22,53 +35,65 @@ class HeuristicAnnotator:
     YIELD RULES
     ─────────────────────────────────────────────────────────────────────────
     RULE 1 — SUSTAINED lateral speed ≥ 0.5 m/s for ≥ YIELD_PERSIST consecutive
-             frames, AND the motion is AWAY from x = 0 (the ambulance's path).
+             EXPORTED frames, AND the motion is AWAY from x = 0 (the
+             ambulance's path).
 
              Threshold: Pierson et al. 2019 (highD German highway).
-             Persistence: nuScenes validation measured the lateral-speed noise
-             floor at ~0.44 m/s at 1 Hz — almost equal to the 0.5 m/s threshold.
-             A noise spike lasts one frame; a real yield sustains for 2–4 s.
-             Requiring YIELD_PERSIST consecutive frames separates signal from
-             noise without needing a lower noise floor.
-             Direction: a vehicle moving TOWARD x = 0 (toward the ambulance) is
-             NOT yielding. If |x_meters| > CENTRE_DEAD_BAND and lateral_speed
-             points toward centre, yield_lateral is zeroed.
 
-    RULE 3 — cumulative lateral ≥ 0.8 m over 3 s, monotonic
+
+    RULE 3 — cumulative lateral ≥ 0.8 m over CUMULATIVE_WINDOW, monotonic
              Window: highD lane-change durations (Krajewski et al. 2018);
              0.8 m threshold empirical.
+
+    RULE X — OUT OF ROAD BOUNDARY (x_meters at the lateral clamp limit)
+
 
     ─────────────────────────────────────────────────────────────────────────
     FAILED-TO-YIELD
     ─────────────────────────────────────────────────────────────────────────
-    Within 20 m, observed for ≥ MIN_OBSERVED_FRAMES, nothing triggered.
-    The 80 % co-operation rate from Cortés & Stefoni 2023 means some
-    failed_to_yield labels are expected and are not annotation errors.
+    Within 20 m, observed for ≥ MIN_OBSERVED_FRAMES (export frames), nothing
+    triggered.
 
     ─────────────────────────────────────────────────────────────────────────
     REMOVED RULES
     ─────────────────────────────────────────────────────────────────────────
     Rule 2 (heading ≥ 15°) and Rule 5 (heading increasing 3 frames) were
-    removed because estimate_heading() could not produce reliable values at
-    1 Hz on an uncalibrated dashcam and was returning 0 for every frame,
-    making those rules permanently silent dead code.
+    removed
 
     Rule 4 (speed drop ≥ 5 km/h) was removed. It operated on speed_kmh (a
     magnitude), which carries the zero-crossing artifact already fixed for
     acceleration.
     """
 
+    # This pipeline's export rate -- see main.py's EXPORT_FPS. Duplicated
+    # here (rather than imported) to keep this file runnable standalone;
+    # keep in sync with main.py if that ever changes.
+    EXPORT_FPS = 10
+
     # Lateral speed threshold — Pierson et al. 2019 (highD)
     YIELD_LATERAL_SPEED  = 0.5    # m/s
-    YIELD_PERSIST        = 2      # consecutive frames lateral speed must hold
+    YIELD_PERSIST         = 2 * EXPORT_FPS  # = 2 real seconds sustained, in export frames
 
     # Directional filter: vehicles within this of x=0 yield in any direction.
     # Outside this band, lateral motion toward centre is not counted.
     CENTRE_DEAD_BAND     = 0.5    # metres
 
     # Cumulative lateral drift rule — empirical; window from highD durations
-    YIELD_CUMULATIVE     = 0.8    # metres
-    CUMULATIVE_WINDOW    = 3      # seconds (= frames at 1 Hz)
+    YIELD_CUMULATIVE      = 0.8    # metres
+    CUMULATIVE_WINDOW      = 3 * EXPORT_FPS  # = 3 real seconds, in export frames
+
+    # Out-of-road-boundary rule — same values as lane_config.py's LANE_WIDTHS
+    # and homography.py's SHOULDER_METERS. Duplicated here because the
+    # vehicle dict carries lanes_total/road_type but not lane_width_meters.
+    LANE_WIDTHS = {
+        "highway":      3.75,
+        "urban":        3.00,
+        "intersection": 3.00,
+        "roundabout":   3.00,
+        "unknown":      3.00,
+    }
+    SHOULDER_METERS          = 3.0    # metres, matches homography.py
+    BOUNDARY_TOLERANCE       = 0.01   # metres, float-rounding slack
 
     # Braking thresholds
     ABRUPT_BRAKE_THRESHOLD = -2.5  # m/s²
@@ -78,7 +103,7 @@ class HeuristicAnnotator:
     # Proximity limits
     PROXIMITY_THRESHOLD   = 50.0   # metres — outer limit for any annotation
     FAILED_YIELD_PROXIMITY = 20.0  # metres — inner limit for failed_to_yield
-    MIN_OBSERVED_FRAMES   = 3      # frames of history before failed_to_yield fires
+    MIN_OBSERVED_FRAMES    = 3 * EXPORT_FPS  # = 3 real seconds, in export frames
 
     def __init__(self):
         self.lateral_history = {}   # track_id -> deque of lateral_offset values
@@ -128,6 +153,16 @@ class HeuristicAnnotator:
         if (acceleration <= self.BRAKE_ONSET_ACCEL
                 and jerk <= self.BRAKE_ONSET_JERK):
             return "braked_abruptly"
+
+        # ── Rule X: x_meters at the road's lateral boundary ───────────────
+        # homography.py clamps x_meters to ±max_lateral; sitting at that
+        # boundary means the vehicle has effectively left the road.
+        lanes_total = vehicle.get("lanes_total", 3)
+        road_type   = vehicle.get("road_type", "unknown")
+        lane_width  = self.LANE_WIDTHS.get(road_type, self.LANE_WIDTHS["unknown"])
+        max_lateral = (lanes_total * lane_width) / 2.0 + self.SHOULDER_METERS
+        if abs(x_pos) >= max_lateral - self.BOUNDARY_TOLERANCE:
+            return "yielded"
 
         # ── Rule 1: sustained lateral speed away from centre ─────────────
         if self.lateral_run.get(tid, 0) >= self.YIELD_PERSIST:

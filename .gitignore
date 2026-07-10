@@ -15,3 +15,13 @@ models/
 pipeline_visualization/
 review_data/
 videos/
+compare_distance_estimators.py
+output/video1/
+output/video10/
+output/video2/
+output/video3/
+output/video4/
+output/video5/
+output/video6_test/
+validation_plots/
+videos_full_backup/

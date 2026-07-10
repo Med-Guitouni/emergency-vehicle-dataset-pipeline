@@ -25,10 +25,16 @@ class JSONExporter:
         os.makedirs(output_dir, exist_ok=True)
 
     def save(self, timestamp, tracked_vehicles, video_name,
-             emergency_active, scenario_type, video_dir):
+             emergency_active, scenario_type, video_dir, frame_index=None):
         """
-        Write one JSON for a single second.
+        Write one JSON for a single exported frame.
         video_dir must already exist (created once by save_batch).
+
+        frame_index: unique increasing integer used for the filename.
+        Required now that export can run faster than 1Hz (30Hz track+export),
+        since multiple frames can share the same whole second and `timestamp`
+        can be a float -- neither works as a `:04d`-formatted filename on its
+        own. Falls back to `timestamp` (old 1Hz-export behaviour) if not given.
         """
         data = {
             "timestamp":       timestamp,
@@ -75,7 +81,8 @@ class JSONExporter:
                 "bbox":               v["bbox"],
             })
 
-        filename = os.path.join(video_dir, f"t{timestamp:04d}.json")
+        file_id = frame_index if frame_index is not None else timestamp
+        filename = os.path.join(video_dir, f"t{file_id:06d}.json")
         with open(filename, "w") as f:
             json.dump(data, f, indent=2, default=_json_serialize)
 
@@ -95,4 +102,5 @@ class JSONExporter:
                 frame_data["emergency_active"],
                 frame_data["scenario_type"],
                 video_dir,
+                frame_index=frame_data.get("frame_index"),
             )

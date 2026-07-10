@@ -2,7 +2,7 @@ tracker_type: botsort
 track_high_thresh: 0.25
 track_low_thresh: 0.10
 new_track_thresh: 0.25
-track_buffer: 90
+track_buffer: 90   # = 3 real seconds of occlusion memory AT TRACK_FPS=30 ONLY 
 match_thresh: 0.75
 fuse_score: True
 gmc_method: none
