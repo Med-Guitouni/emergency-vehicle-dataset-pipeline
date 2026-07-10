@@ -128,38 +128,6 @@ class HomographyEstimator:
         Project a vehicle's bounding box onto the road plane.
         Returns (x_meters, y_meters, position_reliable).
 
-        Reliability rules (Stein, Mobileye, IEEE IV 2003; Tuohy IV 2010):
-          TOP CLIPPED  — only roof missing, tyres visible → RELIABLE.
-          SIDE CLIPPED — bottom_x centre is biased; better to flag and let
-                         RTS smoother interpolate → UNRELIABLE.
-          BOTTOM CLIPPED — projection input missing → UNRELIABLE.
-          LATERAL CLAMP FIRED — physically impossible value → UNRELIABLE.
-          NEAR HORIZON — ground-plane projection switches to a box-height
-                         estimate instead (see NEAR_HORIZON_MIN_DELTA_PX
-                         above). Still flagged UNRELIABLE even though the
-                         box-height estimate is empirically far more stable
-                         (compare_distance_estimators.py: ~2.4x less
-                         frame-to-frame jitter) — stability was validated,
-                         absolute accuracy was not. Keeping the flag lets
-                         the smoother continue leaning on its motion model
-                         here rather than fully trusting even the improved
-                         measurement.
-
-        PER-TRACK HEIGHT CALIBRATION (accuracy, not just stability)
-        VEHICLE_HEIGHTS_M is a population-level constant per vehicle type --
-        a real SUV isn't the same height as a real sedan, so it's a source
-        of systematic bias the stability validation didn't measure. Many
-        vehicles enter the near-horizon zone by RECEDING, meaning we often
-        have a trustworthy ground-plane reading of that SAME vehicle right
-        before it crosses into the unstable zone. Whenever a track has a
-        reliable ground-plane frame within CALIBRATION_ZONE_MULTIPLIER of
-        the boundary, this vehicle's own effective height is back-solved
-        from that frame's (trusted) y_forward and box_height_px, and used
-        for its own subsequent near-horizon frames instead of the generic
-        constant. Tracks with no such frame (near-horizon from their first
-        observation) fall back to VEHICLE_HEIGHTS_M as before. track_id=None
-        (caller doesn't have one) also falls back, unconditionally.
-
         x_meters: + = right of ambulance centre, − = left
         y_meters: distance ahead (always ≥ 0, larger = further)
         """

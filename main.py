@@ -1,4 +1,5 @@
 import os
+import torch
 
 from preprocessor import VideoPreprocessor
 from detector import VehicleDetector
@@ -48,15 +49,15 @@ Manual inputs (video_lanes.json): lane count per time window, road type,
 emergency_start_second.
 """
 
-TRACK_FPS  = 30
+TRACK_FPS = 30
 EXPORT_FPS = 10
 assert TRACK_FPS % EXPORT_FPS == 0, (
     "TRACK_FPS must be an integer multiple of EXPORT_FPS -- export frame "
     "selection below uses simple frame-count arithmetic, not float-timestamp "
     "comparisons, and requires this to divide evenly."
 )
-EXPORT_INTERVAL_FRAMES = TRACK_FPS // EXPORT_FPS   # export every Nth raw frame
-MIN_DT = 1.0 / EXPORT_FPS   # floor for dt in Phase 2 -- see docstring above
+EXPORT_INTERVAL_FRAMES = TRACK_FPS // EXPORT_FPS  # export every Nth raw frame
+MIN_DT = 1.0 / EXPORT_FPS  # floor for dt in Phase 2 -- see docstring above
 
 sc = SceneClassifier()
 lc = LaneConfig()
@@ -83,17 +84,17 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
 
     window_desc = f"{start_s}s-{end_s}s" if end_s is not None else "full video"
     print(f"\nProcessing: {video_name} @ {TRACK_FPS}Hz track / {EXPORT_FPS}Hz export, "
-          f"no review, window={window_desc}, output=output/{output_name}/")
+          f", window={window_desc}, output=output/{output_name}/")
     if start_s > 0:
         print("  NOTE: tracker starts cold at start_s -- no warm-up from t=0, "
               "possible inflated churn in the first few seconds of this window.")
 
-    p  = VideoPreprocessor(video_path)
-    d  = VehicleDetector()
-    t  = VehicleTracker()
-    h  = HomographyEstimator()
-    e  = JSONExporter()
-    a  = HeuristicAnnotator()
+    p = VideoPreprocessor(video_path)
+    d = VehicleDetector()
+    t = VehicleTracker()
+    h = HomographyEstimator()
+    e = JSONExporter()
+    a = HeuristicAnnotator()
     sv = SurroundingVehicles()
     sm = RTSSmoother()
 
@@ -102,34 +103,34 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     # =================================================================
     # PHASE 1 — track at 30 Hz, export every EXPORT_INTERVAL_FRAMES-th frame
     # =================================================================
-    records   = []   # one entry per EXPORTED frame (10 Hz)
-    track_obs = {}   # track_id -> [(timestamp_float, x, y, reliable)]  (ALL 30Hz obs)
+    records = []  # one entry per EXPORTED frame (10 Hz)
+    track_obs = {}  # track_id -> [(timestamp_float, x, y, reliable)]  (ALL 30Hz obs)
 
-    frame_idx  = 0    # raw tracking frame counter (30 Hz)
-    export_idx = 0    # export record counter (10 Hz) -- used for JSON filenames
-    cached_second               = None
-    cached_scenario_type        = None
-    cached_lane_info            = None
-    cached_emergency_active     = None
+    frame_idx = 0  # raw tracking frame counter (30 Hz)
+    export_idx = 0  # export record counter (10 Hz) -- used for JSON filenames
+    cached_second = None
+    cached_scenario_type = None
+    cached_lane_info = None
+    cached_emergency_active = None
 
     for item in p.stream_frames(fps=TRACK_FPS, start_s=start_s, end_s=end_s):
         timestamp_float = item["timestamp"]
-        whole_second     = int(timestamp_float)
-        is_export_frame  = (frame_idx % EXPORT_INTERVAL_FRAMES == 0)
+        whole_second = int(timestamp_float)
+        is_export_frame = (frame_idx % EXPORT_INTERVAL_FRAMES == 0)
 
         frame_raw = item["frame"]
-        frame     = p.spatial_crop(frame_raw)
+        frame = p.spatial_crop(frame_raw)
         frame_height, frame_width = frame.shape[:2]
 
-        tracked = t.update(d.model, frame)
+        tracked = t.update(d.model, frame, device=d.device)
 
         # scene/lane/emergency lookups: recompute only on crossing into a
         # new whole second, reuse for every raw frame within it
         if whole_second != cached_second:
-            cached_second               = whole_second
-            cached_scenario_type        = sc.classify(frame_raw)
-            cached_lane_info            = lc.get_lane_info(video_name, whole_second, cached_scenario_type)
-            cached_emergency_active, _  = lc.is_emergency_active(video_name, whole_second)
+            cached_second = whole_second
+            cached_scenario_type = sc.classify(frame_raw)
+            cached_lane_info = lc.get_lane_info(video_name, whole_second, cached_scenario_type)
+            cached_emergency_active, _ = lc.is_emergency_active(video_name, whole_second)
 
         vehicles_raw = []
         for v in tracked:
@@ -145,19 +146,19 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
             if is_export_frame:
                 vehicles_raw.append({
                     "track_id": v["track_id"],
-                    "type":     v["type"],
-                    "bbox":     v["bbox"],
+                    "type": v["type"],
+                    "bbox": v["bbox"],
                     "reliable": reliable,
                 })
 
         if is_export_frame:
             records.append({
-                "export_index":     export_idx,
-                "timestamp":        timestamp_float,
-                "scenario_type":    cached_scenario_type,
-                "lane_info":        cached_lane_info,
+                "export_index": export_idx,
+                "timestamp": timestamp_float,
+                "scenario_type": cached_scenario_type,
+                "lane_info": cached_lane_info,
                 "emergency_active": cached_emergency_active,
-                "vehicles_raw":     vehicles_raw,
+                "vehicles_raw": vehicles_raw,
             })
 
             if export_idx % (EXPORT_FPS * 60) == 0:
@@ -178,11 +179,11 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     # PHASE 2 — metrics from smoothed positions, annotate, export
     # =================================================================
     all_frames_data = []
-    last_seen = {}   # track_id -> last EXPORTED timestamp_float, for correct dt
+    last_seen = {}  # track_id -> last EXPORTED timestamp_float, for correct dt
 
     for rec in records:
-        timestamp        = rec["timestamp"]
-        lane_info         = rec["lane_info"]
+        timestamp = rec["timestamp"]
+        lane_info = rec["lane_info"]
         emergency_active = rec["emergency_active"]
 
         vehicles = []
@@ -198,32 +199,32 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
                 tid, x_m, y_m, dt
             )
             acceleration = h.estimate_acceleration(tid, forward_speed, dt)
-            jerk         = h.estimate_jerk(tid, acceleration, dt)
+            jerk = h.estimate_jerk(tid, acceleration, dt)
 
             distance_to_ego = h.estimate_distance_to_ego(x_m, y_m)
-            ttc_to_ego      = h.estimate_ttc_to_ego(y_m, forward_speed)
-            lane_id         = h.estimate_lane_id(x_m, lane_info)
-            lateral_offset  = h.estimate_lateral_offset(x_m, lane_info)
+            ttc_to_ego = h.estimate_ttc_to_ego(y_m, forward_speed)
+            lane_id = h.estimate_lane_id(x_m, lane_info)
+            lateral_offset = h.estimate_lateral_offset(x_m, lane_info)
 
             vehicles.append({
-                "track_id":          tid,
-                "type":              vr["type"],
-                "bbox":              vr["bbox"],
-                "x_meters":          x_m,
-                "y_meters":          y_m,
+                "track_id": tid,
+                "type": vr["type"],
+                "bbox": vr["bbox"],
+                "x_meters": x_m,
+                "y_meters": y_m,
                 "position_reliable": vr["reliable"],
-                "speed_kmh":         speed,
-                "forward_speed_ms":  forward_speed,
-                "lateral_speed_ms":  lateral_speed,
-                "acceleration":      acceleration,
-                "jerk":              jerk,
-                "ttc_to_ego":        ttc_to_ego,
-                "lane_id":           lane_id,
-                "lateral_offset":    lateral_offset,
-                "distance_to_ego":   distance_to_ego,
-                "lanes_total":       lane_info["lanes"],
-                "road_type":         lane_info["road_type"],
-                "lane_source":       lane_info["source"],
+                "speed_kmh": speed,
+                "forward_speed_ms": forward_speed,
+                "lateral_speed_ms": lateral_speed,
+                "acceleration": acceleration,
+                "jerk": jerk,
+                "ttc_to_ego": ttc_to_ego,
+                "lane_id": lane_id,
+                "lateral_offset": lateral_offset,
+                "distance_to_ego": distance_to_ego,
+                "lanes_total": lane_info["lanes"],
+                "road_type": lane_info["road_type"],
+                "lane_source": lane_info["source"],
             })
 
         sv.assign(vehicles, lane_info)
@@ -232,11 +233,11 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
             v["behaviour"] = a.annotate(v, emergency_active)
 
         all_frames_data.append({
-            "frame_index":      rec["export_index"],
-            "timestamp":        timestamp,
+            "frame_index": rec["export_index"],
+            "timestamp": timestamp,
             "emergency_active": emergency_active,
-            "scenario_type":    rec["scenario_type"],
-            "vehicles":         vehicles,
+            "scenario_type": rec["scenario_type"],
+            "vehicles": vehicles,
         })
 
         if rec["export_index"] % (EXPORT_FPS * 120) == 0:
@@ -250,19 +251,30 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
 if __name__ == "__main__":
     import argparse
 
+    # CUDA check -- printed first, before any model loads, so it's the very
+    # first thing visible in the log regardless of which video/mode runs.
+    print("=" * 60)
+    if torch.cuda.is_available():
+        print(f"CUDA available: YES  [{torch.cuda.get_device_name(0)}]")
+    else:
+        print("CUDA available: NO  -- running on CPU"
+              ". Check your torch/CUDA install if a GPU "
+              "is expected to be present.")
+    print("=" * 60)
+
     ap = argparse.ArgumentParser(
         description="Process video(s). No args = full batch run over videos/ "
-                     "(original behaviour, unchanged). --video = single-video "
-                     "test run, optionally windowed with --start/--end."
+                    "(original behaviour, unchanged). --video = single-video "
+                    "test run, optionally windowed with --start/--end."
     )
     ap.add_argument("--video", default=None,
-                     help="Process only this one video (name without extension, "
-                          "e.g. 'video6'), instead of the full videos/ batch.")
+                    help="Process only this one video (name without extension, "
+                         "e.g. 'video6'), instead of the full videos/ batch.")
     ap.add_argument("--start", type=float, default=0.0,
-                     help="Window start in seconds (only used with --video).")
+                    help="Window start in seconds (only used with --video).")
     ap.add_argument("--end", type=float, default=None,
-                     help="Window end in seconds (only used with --video). "
-                          "Omit for start-to-end-of-video.")
+                    help="Window end in seconds (only used with --video). "
+                         "Omit for start-to-end-of-video.")
     args = ap.parse_args()
 
     if args.video:
@@ -290,7 +302,7 @@ if __name__ == "__main__":
 
         for video in videos:
             video_name = os.path.splitext(os.path.basename(video))[0][:30]
-            json_dir   = os.path.join("output", video_name)
+            json_dir = os.path.join("output", video_name)
 
             # skip videos that already have JSON output — lets you quit and
             # relaunch without reprocessing finished videos. Note: if a video

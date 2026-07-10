@@ -57,6 +57,14 @@ class SceneClassifier:
         self.model.load_state_dict(state_dict)
         self.model.eval()
 
+        # was previously hardcoded to CPU regardless of hardware -- model
+        # (and every input tensor fed to it, in _predict below) now moves to
+        # CUDA when available. map_location='cpu' above just controls how the
+        # checkpoint is initially loaded from disk; .to(self.device) here is
+        # what actually determines where inference runs.
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
+
         self.transform = transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.CenterCrop(224),
@@ -69,12 +77,12 @@ class SceneClassifier:
         self.candidate_scenario = None
         self.consecutive_count = 0
 
-        print("Scene classifier ready")
+        print(f"Scene classifier ready  [{self.device.upper()}]")
 
     def _predict(self, frame):
         """Run Places365 on one frame and return mapped scenario type"""
         img = Image.fromarray(frame[:, :, ::-1])
-        input_tensor = self.transform(img).unsqueeze(0)
+        input_tensor = self.transform(img).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
             output = self.model(input_tensor)
