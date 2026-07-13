@@ -16,7 +16,7 @@
     "lanes": [
       {
         "from_second": 0,
-        "to_second": 270,
+        "to_second": 349,
         "lanes": 3,
         "road_type": "highway",
         "notes": "highway, 3 lanes, full clip"
@@ -61,7 +61,7 @@
   "lanes": [
     {
       "from_second": 0,
-      "to_second": 20,
+      "to_second": 1320,
       "lanes": 3,
       "road_type": "highway",
       "notes": "3 lanes highway, full clip"
@@ -73,7 +73,7 @@
   "lanes": [
     {
       "from_second": 0,
-      "to_second": 270,
+      "to_second": 550,
       "lanes": 3,
       "road_type": "urban",
       "notes": "city, 3 lanes, full clip"
@@ -92,14 +92,14 @@
     }
   ]
 },
-  "video6": {
+  "video6_test": {
   "emergency_start_second": 0,
   "lanes": [
     {
       "from_second": 0,
-      "to_second": 425,
+      "to_second": 100,
       "lanes": 2,
-      "road_type": "highway",
+      "road_type": "urban",
       "notes": "highway, 2 lanes, full clip"
     }
   ]
