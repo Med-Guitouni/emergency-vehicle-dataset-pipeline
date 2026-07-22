@@ -71,55 +71,55 @@ class HeuristicAnnotator:
     EXPORT_FPS = 10
 
     # Lateral speed threshold — Pierson et al. 2019 (highD)
-    YIELD_LATERAL_SPEED  = 0.5    # m/s
-    YIELD_PERSIST         = 2 * EXPORT_FPS  # = 2 real seconds sustained, in export frames
+    YIELD_LATERAL_SPEED = 0.5  # m/s
+    YIELD_PERSIST = 2 * EXPORT_FPS  # = 2 real seconds sustained, in export frames
 
     # Directional filter: vehicles within this of x=0 yield in any direction.
     # Outside this band, lateral motion toward centre is not counted.
-    CENTRE_DEAD_BAND     = 0.5    # metres
+    CENTRE_DEAD_BAND = 0.5  # metres
 
     # Cumulative lateral drift rule — empirical; window from highD durations
-    YIELD_CUMULATIVE      = 0.8    # metres
-    CUMULATIVE_WINDOW      = 3 * EXPORT_FPS  # = 3 real seconds, in export frames
+    YIELD_CUMULATIVE = 0.8  # metres
+    CUMULATIVE_WINDOW = 3 * EXPORT_FPS  # = 3 real seconds, in export frames
 
     # Out-of-road-boundary rule — same values as lane_config.py's LANE_WIDTHS
     # and homography.py's SHOULDER_METERS. Duplicated here because the
     # vehicle dict carries lanes_total/road_type but not lane_width_meters.
     LANE_WIDTHS = {
-        "highway":      3.75,
-        "urban":        3.00,
+        "highway": 3.75,
+        "urban": 3.00,
         "intersection": 3.00,
-        "roundabout":   3.00,
-        "unknown":      3.00,
+        "roundabout": 3.00,
+        "unknown": 3.00,
     }
-    SHOULDER_METERS          = 3.0    # metres, matches homography.py
-    BOUNDARY_TOLERANCE       = 0.01   # metres, float-rounding slack
+    SHOULDER_METERS = 3.0  # metres, matches homography.py
+    BOUNDARY_TOLERANCE = 0.01  # metres, float-rounding slack
 
     # Braking thresholds
     ABRUPT_BRAKE_THRESHOLD = -2.5  # m/s²
-    BRAKE_ONSET_ACCEL      = -1.5  # m/s²
-    BRAKE_ONSET_JERK       = -3.0  # m/s³
+    BRAKE_ONSET_ACCEL = -1.5  # m/s²
+    BRAKE_ONSET_JERK = -3.0  # m/s³
 
     # Proximity limits
-    PROXIMITY_THRESHOLD   = 50.0   # metres — outer limit for any annotation
+    PROXIMITY_THRESHOLD = 50.0  # metres — outer limit for any annotation
     FAILED_YIELD_PROXIMITY = 20.0  # metres — inner limit for failed_to_yield
-    MIN_OBSERVED_FRAMES    = 3 * EXPORT_FPS  # = 3 real seconds, in export frames
+    MIN_OBSERVED_FRAMES = 3 * EXPORT_FPS  # = 3 real seconds, in export frames
 
     def __init__(self):
-        self.lateral_history = {}   # track_id -> deque of lateral_offset values
-        self.frames_seen     = {}   # track_id -> count of frames observed
-        self.lateral_run     = {}   # track_id -> consecutive frames above threshold
+        self.lateral_history = {}  # track_id -> deque of lateral_offset values
+        self.frames_seen = {}  # track_id -> count of frames observed
+        self.lateral_run = {}  # track_id -> consecutive frames above threshold
 
     def annotate(self, vehicle, emergency_active):
         if not emergency_active:
             return "normal"
 
-        tid          = vehicle["track_id"]
-        lateral_spd  = vehicle.get("lateral_speed_ms", 0.0)   # signed
-        x_pos        = vehicle.get("x_meters", 0.0)
-        acceleration = vehicle.get("acceleration", 0.0)        # longitudinal, signed
-        jerk         = vehicle.get("jerk", 0.0)
-        distance     = vehicle.get("distance_to_ego", 999.0)
+        tid = vehicle["track_id"]
+        lateral_spd = vehicle.get("lateral_speed_ms", 0.0)  # signed
+        x_pos = vehicle.get("x_meters", 0.0)
+        acceleration = vehicle.get("acceleration") or 0.0  # None when window not yet full
+        jerk = vehicle.get("jerk") or 0.0  # None when window not yet full
+        distance = vehicle.get("distance_to_ego", 999.0)
         curr_lateral = vehicle.get("lateral_offset", 0.0)
 
         self.frames_seen[tid] = self.frames_seen.get(tid, 0) + 1
@@ -158,8 +158,8 @@ class HeuristicAnnotator:
         # homography.py clamps x_meters to ±max_lateral; sitting at that
         # boundary means the vehicle has effectively left the road.
         lanes_total = vehicle.get("lanes_total", 3)
-        road_type   = vehicle.get("road_type", "unknown")
-        lane_width  = self.LANE_WIDTHS.get(road_type, self.LANE_WIDTHS["unknown"])
+        road_type = vehicle.get("road_type", "unknown")
+        lane_width = self.LANE_WIDTHS.get(road_type, self.LANE_WIDTHS["unknown"])
         max_lateral = (lanes_total * lane_width) / 2.0 + self.SHOULDER_METERS
         if abs(x_pos) >= max_lateral - self.BOUNDARY_TOLERANCE:
             return "yielded"
@@ -170,8 +170,8 @@ class HeuristicAnnotator:
 
         # ── Rule 3: cumulative lateral drift over the window, monotonic ──
         if len(self.lateral_history[tid]) >= self.CUMULATIVE_WINDOW:
-            history   = self.lateral_history[tid]
-            total     = abs(history[-1] - history[0])
+            history = self.lateral_history[tid]
+            total = abs(history[-1] - history[0])
             direction = history[-1] - history[0]
             consistent = all(
                 (history[i + 1] - history[i]) * direction >= 0

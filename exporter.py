@@ -58,8 +58,8 @@ class JSONExporter:
                 # + = away from ego / right;  − = toward ego / left
                 "forward_speed_ms":  v.get("forward_speed_ms", 0.0),
                 "lateral_speed_ms":  v.get("lateral_speed_ms", 0.0),
-                "acceleration":      v.get("acceleration", 0.0),
-                "jerk":              v.get("jerk", 0.0),
+                "acceleration":      v.get("acceleration"),
+                "jerk":              v.get("jerk"),
                 # seconds until this vehicle reaches ego if it holds current
                 # trajectory. None = behind ego or not closing (see homography.py)
                 "ttc_to_ego":        v.get("ttc_to_ego"),

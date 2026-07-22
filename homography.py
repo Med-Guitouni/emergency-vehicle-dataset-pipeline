@@ -78,6 +78,15 @@ class HomographyEstimator:
     MAX_RELATIVE_Y_ERROR  = 0.15   # tolerate up to 15% relative y_forward error
     NEAR_HORIZON_MIN_DELTA_PX = ASSUMED_JITTER_PX / MAX_RELATIVE_Y_ERROR  # = 20px
 
+    # Below this box height, even the box-height estimator is too noisy to
+    # trust — a 15px-tall box has ~20% relative height error from the same
+    # 3px jitter, producing ~20% distance error. Above this, the box-height
+    # estimator is empirically 2.4x more stable than ground-plane in the
+    # near-horizon zone (validated via compare_distance_estimators.py), so
+    # near-horizon observations with a box taller than this are marked
+    # RELIABLE rather than blanket-unreliable as before.
+    MIN_BOX_HEIGHT_PX = 15
+
     # assumed real-world vehicle heights (m) for the box-height estimator --
     # same assumption set validated in compare_distance_estimators.py
     VEHICLE_HEIGHTS_M = {
@@ -127,6 +136,43 @@ class HomographyEstimator:
         """
         Project a vehicle's bounding box onto the road plane.
         Returns (x_meters, y_meters, position_reliable).
+
+        Reliability rules (Stein, Mobileye, IEEE IV 2003; Tuohy IV 2010):
+          TOP CLIPPED  — only roof missing, tyres visible → RELIABLE.
+          SIDE CLIPPED — bottom_x centre is biased; better to flag and let
+                         RTS smoother interpolate → UNRELIABLE.
+          BOTTOM CLIPPED — projection input missing → UNRELIABLE.
+          LATERAL CLAMP FIRED — physically impossible value → UNRELIABLE.
+          NEAR HORIZON — ground-plane projection switches to a box-height
+                         estimate instead (see NEAR_HORIZON_MIN_DELTA_PX
+                         above). The box-height estimator is empirically
+                         2.4× more stable (compare_distance_estimators.py)
+                         and is now marked RELIABLE as long as the box is
+                         tall enough to measure accurately (box_height_px
+                         >= MIN_BOX_HEIGHT_PX = 15px). Only tiny boxes
+                         (< 15px tall) in the near-horizon zone are flagged
+                         unreliable, since at that size even box-height has
+                         ~20% relative error from a few pixels of jitter.
+                         Previously ALL near-horizon observations were
+                         blanket-flagged unreliable — this overcorrected,
+                         marking 61% of observations unreliable when only
+                         ~9% had a second, independent cause (diagnosed via
+                         diagnose_two.py on real 4-video output).
+
+        PER-TRACK HEIGHT CALIBRATION (accuracy, not just stability)
+        VEHICLE_HEIGHTS_M is a population-level constant per vehicle type --
+        a real SUV isn't the same height as a real sedan, so it's a source
+        of systematic bias the stability validation didn't measure. Many
+        vehicles enter the near-horizon zone by RECEDING, meaning we often
+        have a trustworthy ground-plane reading of that SAME vehicle right
+        before it crosses into the unstable zone. Whenever a track has a
+        reliable ground-plane frame within CALIBRATION_ZONE_MULTIPLIER of
+        the boundary, this vehicle's own effective height is back-solved
+        from that frame's (trusted) y_forward and box_height_px, and used
+        for its own subsequent near-horizon frames instead of the generic
+        constant. Tracks with no such frame (near-horizon from their first
+        observation) fall back to VEHICLE_HEIGHTS_M as before. track_id=None
+        (caller doesn't have one) also falls back, unconditionally.
 
         x_meters: + = right of ambulance centre, − = left
         y_meters: distance ahead (always ≥ 0, larger = further)
@@ -194,7 +240,8 @@ class HomographyEstimator:
             clamped = True
 
         reliable = (not bottom_clipped and not side_clipped
-                    and not clamped and not near_horizon)
+                    and not clamped
+                    and not (near_horizon and box_height_px < self.MIN_BOX_HEIGHT_PX))
 
         # CALIBRATION: a trustworthy ground-plane frame within the
         # calibration zone gives us this specific vehicle's own effective

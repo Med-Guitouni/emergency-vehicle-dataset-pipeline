@@ -1,9 +1,42 @@
+# track_buffer IS SECRETLY HZ-COUPLED -- READ BEFORE CHANGING TRACK_FPS
+# ------------------------------------------------------------------------
+# Verified against ultralytics/trackers/track.py (on_predict_start): when
+# tracking individual frames via model.track(frame, persist=True) (our
+# calling pattern -- no video source for Ultralytics to read fps from), it
+# ALWAYS instantiates the tracker with a hardcoded frame_rate=30, regardless
+# of the pipeline's actual calling rate:
+#     tracker = TRACKER_MAP[cfg.tracker_type](args=cfg, frame_rate=30)
+# Internally: max_time_lost = int(frame_rate/30.0 * track_buffer). Since
+# frame_rate is always 30, this collapses to max_time_lost = track_buffer
+# exactly (90) -- always, regardless of TRACK_FPS. That "90" is a raw CALL
+# COUNT, not a duration; real-world occlusion memory = 90 / TRACK_FPS
+# seconds. At TRACK_FPS=30 (main.py's current setting) that's exactly 3
+# real seconds -- and 90 = 3 * 30 strongly suggests this value was
+# originally intended for 30Hz calling in the first place, since 90/30=3.
+# At the pipeline's earlier 5Hz setting this was UNINTENTIONALLY 18 real
+# seconds (90/5) -- six times more occlusion memory than whatever was
+# actually intended, discovered during Hz-comparison testing.
+# If TRACK_FPS ever changes again: track_buffer must be re-set to
+# (desired_real_seconds * 30) to keep the SAME real-world memory duration --
+# it will NOT scale itself, because Ultralytics never sees TRACK_FPS at all.
 tracker_type: botsort
 track_high_thresh: 0.25
 track_low_thresh: 0.10
 new_track_thresh: 0.25
-track_buffer: 90   # = 3 real seconds of occlusion memory AT TRACK_FPS=30 ONLY 
-match_thresh: 0.75
+track_buffer: 90   # = 3 real seconds of occlusion memory AT TRACK_FPS=30 ONLY -- see note above
+match_thresh: 0.50   # lowered from 0.75 — diagnose_two.py confirmed short tracks
+                     # have near-identical box size/distance to long tracks,
+                     # ruling out detection loss and pointing to re-association
+                     # failure. 0.75 required 75% IoU overlap between a predicted
+                     # and detected box for a match — anything below got a new ID.
+                     # At 30Hz tracking, consecutive-frame boxes overlap ~0.90
+                     # (measured via raw_iou_mean), so 0.75 shouldn't be the
+                     # bottleneck in normal conditions — but during brief
+                     # partial occlusions, camera shake, or box-size fluctuations,
+                     # IoU can dip below 0.75 momentarily while the vehicle is
+                     # still clearly the same object. 0.50 gives more margin for
+                     # these transient dips without being so loose that genuinely
+                     # different vehicles get merged.
 fuse_score: True
 gmc_method: none
 proximity_thresh: 0.5
