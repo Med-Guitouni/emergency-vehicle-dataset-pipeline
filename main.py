@@ -228,6 +228,7 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     all_frames_data = []
     last_seen = {}        # track_id -> last EXPORTED timestamp_float, for velocity dt
     speed_history = {}    # track_id -> list of (timestamp, forward_speed_ms)
+    accel_hist    = {}    # track_id -> list of (timestamp, acceleration) for jerk window
 
     # seed last_seen from the same t0 used to seed prev_positions_m above,
     # so dt on each track's first exported frame reflects the real elapsed
@@ -271,7 +272,27 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
                 t_past, spd_past = past[-1]
                 accel_dt = max(timestamp - t_past, MIN_DT)
                 acceleration = round((forward_speed - spd_past) / accel_dt, 3)
-                jerk = h.estimate_jerk(tid, acceleration, ACCEL_WINDOW_S)
+
+                # --- jerk over the SAME 1-second window ---
+                # A1 fix: jerk = Δaccel / Δt where Δt is the real elapsed time
+                # between the two acceleration values, NOT ACCEL_WINDOW_S.
+                # The previous code passed ACCEL_WINDOW_S=1.0 as dt to
+                # estimate_jerk, but prev_accelerations stored the accel from
+                # the previous export frame (0.1s ago) -- dividing a 0.1s
+                # change by 1.0s made every jerk value 10x too small,
+                # silently killing the brake-onset rule (jerk <= -3.0 became
+                # unreachable; you'd need real jerk of -30 m/s3 to trigger it).
+                accel_history = accel_hist.setdefault(tid, [])
+                accel_history.append((timestamp, acceleration))
+                accel_hist[tid] = [(t, a) for t, a in accel_history if t >= timestamp - 2.0]
+                past_accel = [(t, a) for t, a in accel_hist[tid]
+                              if t <= timestamp - ACCEL_WINDOW_S]
+                if past_accel:
+                    t_a_past, a_past = past_accel[-1]
+                    jerk_dt = max(timestamp - t_a_past, MIN_DT)
+                    jerk = round((acceleration - a_past) / jerk_dt, 3)
+                else:
+                    jerk = None   # accel window full but jerk window not yet
             else:
                 acceleration = None
                 jerk = None
