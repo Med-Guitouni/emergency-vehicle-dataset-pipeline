@@ -140,15 +140,24 @@ class LaneConfig:
         emergency_active: True if timestamp >= emergency_start_second
         triggered_by:     ["manual"] — distinguishes from old FFT ["siren"] label
 
-        Returns (False, []) if the video is not in the config.
+        DEFAULT (video not in config, or entry has no emergency_start_second):
+        emergency_active=True, always. This matches every existing
+        video_lanes.json entry so far -- all of them used
+        emergency_start_second=0 (siren active for the whole clip), since
+        this dataset's footage is curated to be during an active emergency
+        run throughout. An empty/missing config entry means "assume the
+        same as every other clip", not "assume no emergency" -- the
+        opposite default would silently zero out every behaviour label
+        for the whole dataset (annotator.py's rules all require
+        emergency_active=True to produce anything but "normal").
         """
         entry = self.config.get(video_name)
         if entry is None:
-            return False, []
+            return True, ["manual"]
 
         start = entry.get("emergency_start_second")
         if start is None:
-            return False, []
+            return True, ["manual"]
 
         if timestamp >= start:
             return True, ["manual"]

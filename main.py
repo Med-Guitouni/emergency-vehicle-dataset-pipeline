@@ -7,7 +7,6 @@ from tracker import VehicleTracker
 from homography import HomographyEstimator
 from exporter import JSONExporter
 from annotator import HeuristicAnnotator
-from scene_classifier import SceneClassifier
 from surrounding import SurroundingVehicles
 from lane_config import LaneConfig
 from smoother import RTSSmoother
@@ -71,12 +70,10 @@ assert TRACK_FPS % EXPORT_FPS == 0, (
 EXPORT_INTERVAL_FRAMES = TRACK_FPS // EXPORT_FPS   # export every Nth raw frame
 MIN_DT = 1.0 / EXPORT_FPS   # floor for dt in Phase 2 -- see docstring above
 
-sc = SceneClassifier()
 lc = LaneConfig()
 
 
-def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None,
-                   raw_track_log=None):
+def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None):
     """
     start_s/end_s: optional real-time window (seconds). Default processes
     the entire video, identical to earlier behaviour.
@@ -86,13 +83,6 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     partial window never collides with or gets mistaken for a full-video
     run's output. Lane/emergency config lookups always use the real
     video_name (the video_lanes.json key), regardless of this override.
-
-    raw_track_log: optional list. If given, every raw tracked vehicle from
-    Phase 1 is appended to it as (frame_idx, timestamp_float, track_id) --
-    purely additive instrumentation for diagnostics that need to compare
-    RAW tracker output against the final EXPORTED JSON within the SAME
-    process/run, with zero risk of drift from a separately reimplemented
-    trace. Default None -- normal runs are completely unaffected.
 
     CAVEAT for windowed runs: BoT-SORT starts cold at start_s, with no
     warm-up/track history from t=0 -- expect possibly-inflated ID churn in
@@ -118,8 +108,6 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     sv = SurroundingVehicles()
     sm = RTSSmoother()
 
-    sc.reset()
-
     # =================================================================
     # PHASE 1 — track at 30 Hz, export every EXPORT_INTERVAL_FRAMES-th frame
     # =================================================================
@@ -144,15 +132,15 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
 
         tracked = t.update(d.model, frame, device=d.device)
 
-        if raw_track_log is not None:
-            for v in tracked:
-                raw_track_log.append((frame_idx, timestamp_float, v["track_id"]))
-
-        # scene/lane/emergency lookups: recompute only on crossing into a
-        # new whole second, reuse for every raw frame within it
+        # lane/emergency lookups: recompute only on crossing into a new
+        # whole second, reuse for every raw frame within it. scenario_type
+        # is hardcoded to "highway" -- scene classifier removed since
+        # lane_config.py's fallback always returns highway/3-lane
+        # regardless of scene_type anyway, so classifying was wasted CNN
+        # compute for a value nothing used.
         if whole_second != cached_second:
             cached_second               = whole_second
-            cached_scenario_type        = sc.classify(frame_raw)
+            cached_scenario_type        = "highway"
             cached_lane_info            = lc.get_lane_info(video_name, whole_second, cached_scenario_type)
             cached_emergency_active, _  = lc.is_emergency_active(video_name, whole_second)
 
