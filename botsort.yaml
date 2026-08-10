@@ -23,7 +23,12 @@ tracker_type: botsort
 track_high_thresh: 0.25
 track_low_thresh: 0.10
 new_track_thresh: 0.25
-track_buffer: 90   # = 3 real seconds of occlusion memory AT TRACK_FPS=30 ONLY -- see note above
+# STEP 1 CONFIRMED: config loading verified via live tracker-object readback
+# (tracker.py's _print_tracker_config). track_buffer=5 test showed 51 tracks
+# vs 50 at track_buffer=90 -- an 18x reduction in occlusion memory produced
+# almost no change, confirming track_buffer is NOT the fragmentation driver.
+# Restored to 90 = 3 real seconds of occlusion memory at TRACK_FPS=30.
+track_buffer: 90
 match_thresh: 0.50   # lowered from 0.75 — diagnose_two.py confirmed short tracks
                      # have near-identical box size/distance to long tracks,
                      # ruling out detection loss and pointing to re-association

@@ -68,7 +68,7 @@ class HeuristicAnnotator:
     # This pipeline's export rate -- see main.py's EXPORT_FPS. Duplicated
     # here (rather than imported) to keep this file runnable standalone;
     # keep in sync with main.py if that ever changes.
-    EXPORT_FPS = 10
+    EXPORT_FPS = 5
 
     # Lateral speed threshold — Pierson et al. 2019 (highD)
     YIELD_LATERAL_SPEED = 0.5  # m/s

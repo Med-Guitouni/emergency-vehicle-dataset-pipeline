@@ -7,12 +7,17 @@ class VehicleTracker:
     """
     YOLO detection + BoT-SORT tracking.
 
-
+    WHY BoT-SORT INSTEAD OF BYTETRACK + EMAP
     -----------------------------------------
-
+    At 1 Hz, the ambulance moves ~30 m between frames. ByteTrack matches
+    detections purely by bounding-box overlap (IoU). At 1 Hz the predicted
+    box position is almost never close enough to the new detection for a
+    good IoU match, so the same vehicle gets a new ID every second.
 
     The previous fix (EMAP) was supposed to compensate for ego-motion before
-    the Kalman predict step
+    the Kalman predict step, but it ran AFTER ByteTrack's internal association
+    had already finished — too late to improve matching at all.
+
     BoT-SORT (Aharon et al. 2022, arXiv 2206.14651) solves this correctly:
       1. ReID appearance model — matches vehicles by what they look like, not
          just where they are predicted to be. A vehicle that moved 30 m in
@@ -27,6 +32,7 @@ class VehicleTracker:
 
     def __init__(self):
         print("BoT-SORT tracker ready")
+        self._config_checked = False
 
     @staticmethod
     def _iou(boxA, boxB):
@@ -65,6 +71,10 @@ class VehicleTracker:
             device=device,
         )[0]
 
+        if not self._config_checked:
+            self._config_checked = True
+            self._print_tracker_config(model)
+
         VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
         tracked = []
@@ -80,9 +90,60 @@ class VehicleTracker:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             tracked.append({
                 "track_id": int(box.id[0]),
-                "type": VEHICLE_CLASSES[class_id],
-                "bbox": [x1, y1, x2, y2],
-                "center": [(x1 + x2) // 2, (y1 + y2) // 2],
+                "type":     VEHICLE_CLASSES[class_id],
+                "bbox":     [x1, y1, x2, y2],
+                "center":   [(x1 + x2) // 2, (y1 + y2) // 2],
             })
 
         return tracked
+
+    def _print_tracker_config(self, model):
+        """
+        STEP 1 VERIFICATION (config-loading investigation): reads the ACTUAL
+        config values back off the live tracker object Ultralytics
+        instantiated -- not by re-parsing botsort.yaml ourselves, which only
+        proves the file is well-formed, not that these are the values the
+        matcher is actually using. Runs once, on the first tracking call,
+        so this prints at the very start of processing the first video.
+
+        If any of these do not match what's in botsort.yaml, the config is
+        not being applied and every tracker-parameter experiment run so far
+        (track_buffer, match_thresh) needs to be treated as invalid.
+        """
+        try:
+            predictor = getattr(model, "predictor", None)
+            trackers = getattr(predictor, "trackers", None) if predictor else None
+            print("  " + "=" * 62)
+            if not trackers:
+                print("  [CONFIG CHECK] FAILED: model.predictor.trackers not found.")
+                print("  Cannot verify which config is actually in effect.")
+                print("  " + "=" * 62)
+                return
+
+            tracker_obj = trackers[0]
+            args = getattr(tracker_obj, "args", None)
+            print("  [CONFIG CHECK] Live values read from the actual tracker object:")
+            if args is not None:
+                print(f"    track_buffer      = {getattr(args, 'track_buffer', 'MISSING')}"
+                      f"   (botsort.yaml currently says 5)")
+                print(f"    match_thresh      = {getattr(args, 'match_thresh', 'MISSING')}"
+                      f"   (botsort.yaml currently says 0.50)")
+                print(f"    with_reid         = {getattr(args, 'with_reid', 'MISSING')}"
+                      f"   (botsort.yaml currently says True)")
+                print(f"    appearance_thresh = {getattr(args, 'appearance_thresh', 'MISSING')}"
+                      f"   (botsort.yaml currently says 0.25)")
+                print(f"    proximity_thresh  = {getattr(args, 'proximity_thresh', 'MISSING')}"
+                      f"   (botsort.yaml currently says 0.5)")
+            else:
+                print("    WARNING: tracker object has no .args attribute at all")
+
+            max_time_lost = getattr(tracker_obj, "max_time_lost", "MISSING")
+            print(f"    max_time_lost (derived) = {max_time_lost}"
+                  f"  (raw call count, NOT seconds -- see botsort.yaml header)")
+            print("  " + "=" * 62)
+            print("  If track_buffer above reads 5, the YAML IS being applied.")
+            print("  If it reads 90 (or anything else), the YAML is NOT being")
+            print("  applied and every prior track_buffer/match_thresh test is invalid.")
+            print("  " + "=" * 62)
+        except Exception as e:
+            print(f"  [CONFIG CHECK] Could not verify: {e}")

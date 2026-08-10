@@ -59,14 +59,19 @@ class JSONExporter:
                 "forward_speed_ms":  v.get("forward_speed_ms", 0.0),
                 "lateral_speed_ms":  v.get("lateral_speed_ms", 0.0),
                 "acceleration":      v.get("acceleration"),
+                "lateral_acceleration": v.get("lateral_acceleration"),
                 "jerk":              v.get("jerk"),
                 # seconds until this vehicle reaches ego if it holds current
                 # trajectory. None = behind ego or not closing (see homography.py)
                 "ttc_to_ego":        v.get("ttc_to_ego"),
                 "lane_id":           v.get("lane_id", 0),
                 "lateral_offset":    v.get("lateral_offset", 0.0),
+                # normalised [-1,+1] position within own lane (0 = lane centre)
+                "lane_position_norm": v.get("lane_position_norm"),
+                # normalised [-1,+1] position across whole road (0 = road centre)
+                "road_position_norm": v.get("road_position_norm"),
                 "distance_to_ego":   v.get("distance_to_ego", 0.0),
-                "lanes_total":       v.get("lanes_total", 2),
+                "lanes_total":       v.get("lanes_total", 3),
                 # "config" = manual annotation;  "scene_classifier" = fallback
                 "road_type":         v.get("road_type", "unknown"),
                 "lane_source":       v.get("lane_source", "unknown"),

@@ -73,8 +73,8 @@ class LaneConfig:
         "unknown":      3.00,
     }
 
-    DEFAULT_LANES     = 2
-    DEFAULT_ROAD_TYPE = "unknown"
+    DEFAULT_LANES     = 3
+    DEFAULT_ROAD_TYPE = "highway"
 
     def __init__(self, config_path="video_lanes.json"):
         self.config = {}
@@ -120,13 +120,17 @@ class LaneConfig:
                         "source":            "config"
                     }
 
-        # fallback to scene classifier
-        road_type = scene_type if scene_type and scene_type != "unknown" else self.DEFAULT_ROAD_TYPE
+        # fallback: ALWAYS highway / 3-lane by project decision.
+        # The scene classifier is deliberately ignored here -- only highway
+        # footage is being processed, and the scene classifier is not allowed
+        # to override this default (it sometimes misreads highway as urban).
+        # scene_type is accepted as a parameter for signature compatibility
+        # but is intentionally unused.
         return {
             "lanes":             self.DEFAULT_LANES,
-            "lane_width_meters": self.LANE_WIDTHS.get(road_type, self.LANE_WIDTHS["unknown"]),
-            "road_type":         road_type,
-            "source":            "scene_classifier"
+            "lane_width_meters": self.LANE_WIDTHS[self.DEFAULT_ROAD_TYPE],
+            "road_type":         self.DEFAULT_ROAD_TYPE,
+            "source":            "default_highway_3lane"
         }
 
     def is_emergency_active(self, video_name, timestamp):

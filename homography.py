@@ -363,6 +363,44 @@ class HomographyEstimator:
         lane_centre = -half_road + (lane_id - 0.5) * lane_width
         return round(float(x_meters - lane_centre), 2)
 
+    def estimate_lane_position_norm(self, x_meters, lane_info=None):
+        """
+        Normalised position WITHIN the vehicle's own lane, in [-1, +1].
+        0 = lane centre, -1 = left lane edge, +1 = right lane edge.
+        This is lateral_offset divided by half the lane width, so it means
+        the same thing regardless of lane width (a 1m offset is a bigger
+        deal in a 3m lane than a 4m lane). Transfers across road types;
+        raw metres do not. (MTP-GO expects this normalised form.)
+        """
+        if lane_info is None:
+            lane_width = self.LANE_WIDTH_METERS
+        else:
+            lane_width = lane_info["lane_width_meters"]
+        offset = self.estimate_lateral_offset(x_meters, lane_info)
+        half_lane = lane_width / 2.0
+        if half_lane <= 0:
+            return 0.0
+        return round(max(-1.0, min(1.0, offset / half_lane)), 3)
+
+    def estimate_road_position_norm(self, x_meters, lane_info=None):
+        """
+        Normalised position across the WHOLE road, in [-1, +1].
+        0 = road centre (ego centreline), -1 = left road edge,
+        +1 = right road edge (i.e. onto the shoulder). Directly relevant to
+        "how far right am I on the entire road" -- i.e. pulling onto the
+        hard shoulder to let the ambulance pass. (MTP-GO feature.)
+        """
+        if lane_info is None:
+            n_lanes   = 3
+            lane_width = self.LANE_WIDTH_METERS
+        else:
+            n_lanes   = lane_info["lanes"]
+            lane_width = lane_info["lane_width_meters"]
+        half_road = (n_lanes * lane_width) / 2.0
+        if half_road <= 0:
+            return 0.0
+        return round(max(-1.0, min(1.0, x_meters / half_road)), 3)
+
     def estimate_ttc_to_ego(self, y_meters, forward_speed_ms):
         """
         Seconds until this vehicle reaches the ambulance at current closing speed.

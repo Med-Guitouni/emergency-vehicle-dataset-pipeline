@@ -13,7 +13,7 @@ from lane_config import LaneConfig
 from smoother import RTSSmoother
 
 """
-Pipeline — two phases, 30 Hz tracking / 10 Hz export, no manual review.
+Pipeline — two phases, 30 Hz tracking / 5 Hz export, no manual review.
 
 TRACK_FPS = 30, EXPORT_FPS = 10 -- decoupled again (unlike an intermediate
 version of this file which ran both at 30Hz). Tracking runs denser than
@@ -54,7 +54,7 @@ is imported or called from here. This is a fully automatic, unreviewed run.
 ANNOTATOR THRESHOLD NOTE: annotator.py's frame-count constants (YIELD_PERSIST,
 CUMULATIVE_WINDOW, MIN_OBSERVED_FRAMES) are calibrated in terms of EXPORT
 frames, since annotate() is only ever called once per exported observation
-(Phase 2, below) -- they were rescaled for EXPORT_FPS=10, not TRACK_FPS=30.
+(Phase 2, below) -- they were rescaled for EXPORT_FPS=5, not TRACK_FPS=30.
 See annotator.py's docstring.
 
 Manual inputs (video_lanes.json): lane count per time window, road type,
@@ -62,7 +62,7 @@ emergency_start_second.
 """
 
 TRACK_FPS  = 30
-EXPORT_FPS = 10
+EXPORT_FPS = 5
 assert TRACK_FPS % EXPORT_FPS == 0, (
     "TRACK_FPS must be an integer multiple of EXPORT_FPS -- export frame "
     "selection below uses simple frame-count arithmetic, not float-timestamp "
@@ -75,7 +75,8 @@ sc = SceneClassifier()
 lc = LaneConfig()
 
 
-def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None):
+def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None,
+                   raw_track_log=None):
     """
     start_s/end_s: optional real-time window (seconds). Default processes
     the entire video, identical to earlier behaviour.
@@ -85,6 +86,13 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     partial window never collides with or gets mistaken for a full-video
     run's output. Lane/emergency config lookups always use the real
     video_name (the video_lanes.json key), regardless of this override.
+
+    raw_track_log: optional list. If given, every raw tracked vehicle from
+    Phase 1 is appended to it as (frame_idx, timestamp_float, track_id) --
+    purely additive instrumentation for diagnostics that need to compare
+    RAW tracker output against the final EXPORTED JSON within the SAME
+    process/run, with zero risk of drift from a separately reimplemented
+    trace. Default None -- normal runs are completely unaffected.
 
     CAVEAT for windowed runs: BoT-SORT starts cold at start_s, with no
     warm-up/track history from t=0 -- expect possibly-inflated ID churn in
@@ -135,6 +143,10 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
         frame_height, frame_width = frame.shape[:2]
 
         tracked = t.update(d.model, frame, device=d.device)
+
+        if raw_track_log is not None:
+            for v in tracked:
+                raw_track_log.append((frame_idx, timestamp_float, v["track_id"]))
 
         # scene/lane/emergency lookups: recompute only on crossing into a
         # new whole second, reuse for every raw frame within it
@@ -229,6 +241,7 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     last_seen = {}        # track_id -> last EXPORTED timestamp_float, for velocity dt
     speed_history = {}    # track_id -> list of (timestamp, forward_speed_ms)
     accel_hist    = {}    # track_id -> list of (timestamp, acceleration) for jerk window
+    lat_speed_hist = {}   # track_id -> list of (timestamp, lateral_speed_ms) for lateral accel
 
     # seed last_seen from the same t0 used to seed prev_positions_m above,
     # so dt on each track's first exported frame reflects the real elapsed
@@ -297,36 +310,94 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
                 acceleration = None
                 jerk = None
 
+            # --- lateral acceleration over the same 1-second window ---
+            # MTP-GO wants both longitudinal AND lateral acceleration. Same
+            # method as longitudinal: change in lateral_speed_ms per second,
+            # over the 1s window (not the per-frame dt, same noise reasoning).
+            # A strong yielding signal -- a car swerving aside has clear
+            # lateral acceleration.
+            lat_history = lat_speed_hist.setdefault(tid, [])
+            lat_history.append((timestamp, lateral_speed))
+            lat_speed_hist[tid] = [(t, s) for t, s in lat_history if t >= timestamp - 2.0]
+            past_lat = [(t, s) for t, s in lat_speed_hist[tid]
+                        if t <= timestamp - ACCEL_WINDOW_S]
+            if past_lat:
+                t_lat_past, lat_spd_past = past_lat[-1]
+                lat_accel_dt = max(timestamp - t_lat_past, MIN_DT)
+                lateral_acceleration = round((lateral_speed - lat_spd_past) / lat_accel_dt, 3)
+            else:
+                lateral_acceleration = None
+
             distance_to_ego = h.estimate_distance_to_ego(x_m, y_m)
             ttc_to_ego      = h.estimate_ttc_to_ego(y_m, forward_speed)
             lane_id         = h.estimate_lane_id(x_m, lane_info)
             lateral_offset  = h.estimate_lateral_offset(x_m, lane_info)
+            lane_position_norm = h.estimate_lane_position_norm(x_m, lane_info)
+            road_position_norm = h.estimate_road_position_norm(x_m, lane_info)
 
             vehicles.append({
-                "track_id":          tid,
-                "type":              vr["type"],
-                "bbox":              vr["bbox"],
-                "x_meters":          x_m,
-                "y_meters":          y_m,
-                "position_reliable": vr["reliable"],
-                "speed_kmh":         speed,
-                "forward_speed_ms":  forward_speed,
-                "lateral_speed_ms":  lateral_speed,
-                "acceleration":      acceleration,
-                "jerk":              jerk,
-                "ttc_to_ego":        ttc_to_ego,
-                "lane_id":           lane_id,
-                "lateral_offset":    lateral_offset,
-                "distance_to_ego":   distance_to_ego,
-                "lanes_total":       lane_info["lanes"],
-                "road_type":         lane_info["road_type"],
-                "lane_source":       lane_info["source"],
+                "track_id":            tid,
+                "type":                vr["type"],
+                "bbox":                vr["bbox"],
+                "x_meters":            x_m,
+                "y_meters":            y_m,
+                "position_reliable":   vr["reliable"],
+                "speed_kmh":           speed,
+                "forward_speed_ms":    forward_speed,
+                "lateral_speed_ms":    lateral_speed,
+                "acceleration":        acceleration,
+                "lateral_acceleration": lateral_acceleration,
+                "jerk":                jerk,
+                "ttc_to_ego":          ttc_to_ego,
+                "lane_id":             lane_id,
+                "lateral_offset":      lateral_offset,
+                "lane_position_norm":  lane_position_norm,
+                "road_position_norm":  road_position_norm,
+                "distance_to_ego":     distance_to_ego,
+                "lanes_total":         lane_info["lanes"],
+                "road_type":           lane_info["road_type"],
+                "lane_source":         lane_info["source"],
             })
+
+        # --- EGO VEHICLE ------------------------------------------------------
+        # The ambulance itself, always present in every exported frame, at the
+        # origin of its own relative frame. Position (0,0) and velocity (0,0)
+        # are trivially true since every other vehicle's kinematics are
+        # measured RELATIVE to the ego. Inserted BEFORE sv.assign() so other
+        # vehicles correctly find the ego as a neighbour (preceding/following).
+        # track_id = 0 is reserved for the ego (real tracks are >= 1).
+        ego = {
+            "track_id":            0,
+            "type":                "ego",
+            "bbox":                None,
+            "x_meters":            0.0,
+            "y_meters":            0.0,
+            "position_reliable":   True,   # ego's own position is exactly known
+            "speed_kmh":           0.0,
+            "forward_speed_ms":    0.0,
+            "lateral_speed_ms":    0.0,
+            "acceleration":        0.0,
+            "lateral_acceleration": 0.0,
+            "jerk":                0.0,
+            "ttc_to_ego":          None,
+            "lane_id":             h.estimate_lane_id(0.0, lane_info),
+            "lateral_offset":      h.estimate_lateral_offset(0.0, lane_info),
+            "lane_position_norm":  h.estimate_lane_position_norm(0.0, lane_info),
+            "road_position_norm":  h.estimate_road_position_norm(0.0, lane_info),
+            "distance_to_ego":     0.0,
+            "lanes_total":         lane_info["lanes"],
+            "road_type":           lane_info["road_type"],
+            "lane_source":         lane_info["source"],
+        }
+        vehicles.append(ego)
 
         sv.assign(vehicles, lane_info)
 
         for v in vehicles:
-            v["behaviour"] = a.annotate(v, emergency_active)
+            if v["track_id"] == 0:
+                v["behaviour"] = "ego"   # the ambulance doesn't "yield" to itself
+            else:
+                v["behaviour"] = a.annotate(v, emergency_active)
 
         all_frames_data.append({
             "frame_index":      rec["export_index"],
