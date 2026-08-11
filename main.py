@@ -11,7 +11,22 @@ from surrounding import SurroundingVehicles
 from lane_config import LaneConfig
 from smoother import RTSSmoother
 
+
+
 """
+
+
+
+____________________________________________________________________________________________
+Cristian
+____________________
+
+
+
+
+
+
+
 Pipeline — two phases, 30 Hz tracking / 5 Hz export, no manual review.
 
 TRACK_FPS = 30, EXPORT_FPS = 10 -- decoupled again (unlike an intermediate
