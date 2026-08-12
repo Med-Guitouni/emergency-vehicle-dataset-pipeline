@@ -1,0 +1,38 @@
+{
+  "timestamp": 158.0,
+  "video_source": "20240122_[VOLLSPERRUNG nach Ve",
+  "emergency_active": true,
+  "scenario_type": "highway",
+  "vehicles": [
+    {
+      "id": 0,
+      "type": "ego",
+      "x_meters": 0.0,
+      "y_meters": 0.0,
+      "position_reliable": true,
+      "speed_kmh": 0.0,
+      "forward_speed_ms": 0.0,
+      "lateral_speed_ms": 0.0,
+      "acceleration": 0.0,
+      "lateral_acceleration": 0.0,
+      "jerk": 0.0,
+      "ttc_to_ego": null,
+      "lane_id": 2,
+      "lateral_offset": 0.0,
+      "lane_position_norm": 0.0,
+      "road_position_norm": 0.0,
+      "distance_to_ego": 0.0,
+      "lanes_total": 3,
+      "road_type": "highway",
+      "lane_source": "default_highway_3lane",
+      "preceding_id": null,
+      "following_id": null,
+      "left_preceding_id": null,
+      "left_following_id": null,
+      "right_preceding_id": null,
+      "right_following_id": null,
+      "behaviour": "ego",
+      "bbox": null
+    }
+  ]
+}
