@@ -13,7 +13,7 @@ def _json_serialize(obj):
 
 class JSONExporter:
     """
-    Writes one JSON file per second to output/<video_name>/.
+    Writes one JSON file per exported frame to output/<video_name>/.
 
     save_batch() is the only external entry point. save() is the per-frame
     writer; the output directory is created once in save_batch() rather than
@@ -31,10 +31,10 @@ class JSONExporter:
         video_dir must already exist (created once by save_batch).
 
         frame_index: unique increasing integer used for the filename.
-        Required now that export can run faster than 1Hz (30Hz track+export),
-        since multiple frames can share the same whole second and `timestamp`
-        can be a float -- neither works as a `:04d`-formatted filename on its
-        own. Falls back to `timestamp` (old 1Hz-export behaviour) if not given.
+        Required now that export runs faster than 1 Hz, since multiple frames
+        share the same whole second and `timestamp` is a float -- neither
+        works as a zero-padded filename on its own. Falls back to `timestamp`
+        if not given.
         """
         data = {
             "timestamp":       timestamp,
@@ -72,7 +72,8 @@ class JSONExporter:
                 "road_position_norm": v.get("road_position_norm"),
                 "distance_to_ego":   v.get("distance_to_ego", 0.0),
                 "lanes_total":       v.get("lanes_total", 3),
-                # "config" = manual annotation;  "scene_classifier" = fallback
+                # "config" = manual annotation in video_lanes.json;
+                # "default_highway_3lane" = fallback for an unannotated video
                 "road_type":         v.get("road_type", "unknown"),
                 "lane_source":       v.get("lane_source", "unknown"),
                 # highD-style surrounding vehicle IDs (None if no neighbour)
@@ -93,7 +94,7 @@ class JSONExporter:
 
     def save_batch(self, all_frames_data, video_name):
         """
-        Write one JSON per frame for the full video.
+        Write one JSON per exported frame for the full video.
         Creates the output directory once here instead of on every save() call.
         """
         video_dir = os.path.join(self.output_dir, video_name)
