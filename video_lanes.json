@@ -4,17 +4,18 @@
     "lanes": [
       {
         "from_second": 0,
-        "to_second": 9000,
+        "to_second": 450,
         "lanes": 3,
         "road_type": "highway",
         "notes": "Autobahn, 3 lanes, active run throughout"
-      }
-       {
-        "from_second": 9000,
+      },
+      {
+        "from_second": 450,
         "to_second": 9999,
         "lanes": 2,
         "road_type": "highway",
-        "notes": "Autobahn, 3 lanes, active run throughout"
+        "notes": "Autobahn narrows to 2 lanes after the junction"
       }
     ]
-  },
+  }
+}
