@@ -10,7 +10,7 @@ Output: `output/<video_name>/t000000.json …`, one file per exported frame.
 
 Tracking runs at 30 Hz. Records are exported at 5 Hz (every 6th tracked frame).
 
-For the maths behind the numbers, see [MATHS.MD](MATHS.MD).
+
 
 ---
 
@@ -22,8 +22,7 @@ brew install ffmpeg          # or: apt install ffmpeg
 ```
 
 Keep Ultralytics current — BoT-SORT's `model: auto` in `botsort.yaml` needs a
-recent version, and the ReID weights ship with the package. Nothing else to
-clone: no EMAP, no Depth Anything, no separate tracker repo.
+recent version, and the ReID weights ship with the package. 
 
 A CUDA GPU is strongly recommended. `main.py` prints whether it found one
 before loading any model; on CPU, 30 Hz tracking is very slow.
@@ -351,67 +350,21 @@ is used and the residual is documented, not removed.
 | `botsort.yaml` | Tracker config — read the header before changing `TRACK_FPS` |
 | `calibration_log.json` | Per-frame calibration measurements |
 
----
 
-## Validation
-
-The two `validate_nuscenes_*` scripts feed nuScenes 3D boxes and real
-per-frame calibration into this pipeline's own projection code, so the only
-thing under test is the geometry and the smoother, isolated from detection and
-tracking error. Smoothing cuts forward-speed error from 3.74 to 2.14 m/s and
-lateral-speed error from 0.76 to 0.53 m/s on the straight-line subset.
-
-What this does **not** measure is detection and tracking error from the
-YOLOv8x/BoT-SORT stage, which stays a separate, unquantified source of error.
 
 ---
 
 ## Known limitations
 
-**Speeds are relative, not absolute.** Recovering the ambulance's own speed
-needs GPS, an odometer or an IMU, none of which the footage has. Three
-vision-only estimators were tried against nuScenes and all three failed, with
-biases in opposite directions: in dense traffic the visible road surface is
-mostly covered by vehicles moving at roughly the ambulance's speed, so the
-flow signal every estimator depends on is masked. A road-segmentation-gated
-estimator is the open direction.
+**Speeds are relative, not absolute.**
 
-**The road is assumed flat.** The measured horizon ratio shifts within a
-video, consistent with real grade; the compromise value leaves a residual
-error.
+**The road is assumed flat.** 
 
-**Tracks fragment.** Exported tracks are shorter and more numerous than the
-real vehicle count. The cause is identified rather than open: roughly 70% of
-track terminations happen because no detection existed at that spot at all,
-not because association failed — no tracker setting can link a detection that
-was never produced. The vehicles that get lost are small, distant and sitting
-essentially on the horizon line, which is the same physical limit that drives
-the distance error above. The fix is higher-resolution inference or a detector
-fine-tuned on small distant vehicles. If you need continuous trajectories,
-filter on track length.
+**Tracks fragment.** 
 
 ---
 
-## Troubleshooting
 
-**Every row says `lane_source: "default_highway_3lane"`.** The video isn't in
-`video_lanes.json`, or its key doesn't match the filename truncated to 30
-characters.
-
-**`CUDA available: NO`.** Torch was installed without CUDA support.
-Reinstall it from the PyTorch index for your CUDA version; 30 Hz tracking on
-CPU is impractically slow.
-
-**OpenCV pyramid-size assertion from the tracker.** Camera-motion
-compensation needs a constant frame size. `preprocessor.spatial_crop`
-guarantees that by resizing every frame to 1280×720 — if you change the crop,
-keep the fixed resize.
-
-**A video is skipped.** It already has files in `output/<video_name>/`. Delete
-the folder to reprocess.
-
-**IDs churn in the first seconds of a windowed run.** Expected: the tracker
-starts cold at `--start` with no history. Not a property of full runs.
 
 
 
