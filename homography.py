@@ -1,4 +1,3 @@
-import cv2
 import numpy as np
 
 
@@ -28,12 +27,15 @@ class HomographyEstimator:
     =========================================================================
     camera_height    — 1.4 m, confirmed by lane-width measurement protocol
                        (mean 1.40 m across 6 frames, ~10 % spread).
-    focal_length_factor — frame_width * 0.72. Mean measured ~0.77 with high
-                       (~31 %) spread across frames; treat as directionally
-                       confirmed but not precisely nailed down.
+    focal_length_factor — frame_width * 0.72, fit by least squares on the
+                       regulated 18 m lane-dash period (max residual < 4 px
+                       across six frames). Spread across frames is wide
+                       (0.41-1.18); treat as measured but not tightly bounded.
     horizon_ratio    — 0.60 (fraction down the cropped frame). Compromise
-                       across frames that genuinely disagreed (0.55–0.62),
-                       most likely due to real road-grade differences.
+                       across frames that genuinely disagreed (0.549-0.619),
+                       most likely due to real road-grade differences. The
+                       residual uncertainty this leaves is a documented
+                       limitation, not a removed one.
     CX_RATIO         — 0.47. Measured from vanishing point of lane lines
                        across 6 frames. Below 0.5 means the camera's forward
                        axis points slightly right of image centre.
@@ -82,13 +84,12 @@ class HomographyEstimator:
     # trust — a 15px-tall box has ~20% relative height error from the same
     # 3px jitter, producing ~20% distance error. Above this, the box-height
     # estimator is empirically 2.4x more stable than ground-plane in the
-    # near-horizon zone (validated via compare_distance_estimators.py), so
-    # near-horizon observations with a box taller than this are marked
-    # RELIABLE rather than blanket-unreliable as before.
+    # near-horizon zone, so near-horizon observations with a box taller than
+    # this are marked RELIABLE rather than blanket-unreliable.
     MIN_BOX_HEIGHT_PX = 15
 
-    # assumed real-world vehicle heights (m) for the box-height estimator --
-    # same assumption set validated in compare_distance_estimators.py
+    # assumed real-world vehicle heights (m) for the box-height estimator,
+    # used until a track calibrates its own effective height (see below)
     VEHICLE_HEIGHTS_M = {
         "car":        1.5,
         "truck":      3.5,
@@ -109,10 +110,6 @@ class HomographyEstimator:
 
         # previous METRIC position per track_id -> (x_m, y_m), for velocity
         self.prev_positions_m = {}
-
-        # previous forward speed and acceleration per track_id, for accel/jerk
-        self.prev_speeds = {}
-        self.prev_accelerations = {}
 
         # per-track calibrated real-world height (m) for the near-horizon
         # box-height estimator -- see get_vehicle_position's calibration
@@ -146,18 +143,17 @@ class HomographyEstimator:
           NEAR HORIZON — ground-plane projection switches to a box-height
                          estimate instead (see NEAR_HORIZON_MIN_DELTA_PX
                          above). The box-height estimator is empirically
-                         2.4× more stable (compare_distance_estimators.py)
-                         and is now marked RELIABLE as long as the box is
+                         2.4x more stable and is marked RELIABLE as long as
+                         the box is
                          tall enough to measure accurately (box_height_px
                          >= MIN_BOX_HEIGHT_PX = 15px). Only tiny boxes
                          (< 15px tall) in the near-horizon zone are flagged
                          unreliable, since at that size even box-height has
                          ~20% relative error from a few pixels of jitter.
-                         Previously ALL near-horizon observations were
-                         blanket-flagged unreliable — this overcorrected,
-                         marking 61% of observations unreliable when only
-                         ~9% had a second, independent cause (diagnosed via
-                         diagnose_two.py on real 4-video output).
+                         An earlier version blanket-flagged ALL near-horizon
+                         observations unreliable, which marked 61% of
+                         observations unreliable when only ~9% had a second,
+                         independent cause.
 
         PER-TRACK HEIGHT CALIBRATION (accuracy, not just stability)
         VEHICLE_HEIGHTS_M is a population-level constant per vehicle type --
@@ -288,31 +284,6 @@ class HomographyEstimator:
                 round(float(lateral_speed), 2),
                 round(float(speed_kmh), 2))
 
-    def estimate_acceleration(self, track_id, forward_speed_ms, dt=1.0):
-        """
-        Longitudinal acceleration in m/s² = change in signed forward speed.
-
-        Using signed forward speed (not magnitude) avoids the phantom-braking
-        artifact that occurred when relative velocity crossed zero: the old
-        magnitude-based version collapsed to 0 and rebounded, manufacturing a
-        hard-brake + acceleration even though nothing physical happened.
-        Negative = braking relative to ego (highD style).
-        """
-        prev = self.prev_speeds.get(track_id, forward_speed_ms)
-        acceleration = round((forward_speed_ms - prev) / dt, 3)
-        self.prev_speeds[track_id] = forward_speed_ms
-        return acceleration
-
-    def estimate_jerk(self, track_id, curr_acceleration, dt=1.0):
-        """
-        Jerk in m/s³ = change in acceleration.
-        High jerk = sudden onset (panic stop). Used by the brake-onset rule.
-        """
-        prev_acc = self.prev_accelerations.get(track_id, curr_acceleration)
-        jerk = round((curr_acceleration - prev_acc) / dt, 3)
-        self.prev_accelerations[track_id] = curr_acceleration
-        return jerk
-
     # ------------------------------------------------------------------
     # DISTANCE / LANE / LATERAL OFFSET
     # ------------------------------------------------------------------
@@ -413,3 +384,4 @@ class HomographyEstimator:
         if y_meters <= 0 or closing_speed < 0.1:
             return None
         return round(y_meters / closing_speed, 2)
+   
