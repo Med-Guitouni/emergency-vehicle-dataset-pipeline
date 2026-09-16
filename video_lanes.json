@@ -1,1 +1,20 @@
-
+{
+  "example_vid": {
+    "emergency_start_second": 0,
+    "lanes": [
+      {
+        "from_second": 0,
+        "to_second": 9000,
+        "lanes": 3,
+        "road_type": "highway",
+        "notes": "Autobahn, 3 lanes, active run throughout"
+      }
+       {
+        "from_second": 9000,
+        "to_second": 9999,
+        "lanes": 2,
+        "road_type": "highway",
+        "notes": "Autobahn, 3 lanes, active run throughout"
+      }
+    ]
+  },
