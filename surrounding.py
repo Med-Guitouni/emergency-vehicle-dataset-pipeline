@@ -3,32 +3,27 @@ import numpy as np
 
 class SurroundingVehicles:
     """
-    This class answers a simple question for each vehicle in every frame:
-    who is directly around it? For each detected vehicle it finds up to six neighbours —
-     This information is stored as track IDs in the JSON output,
-       so the analysis can later reconstruct relational interactions like "vehicle 301 was behind
-        vehicle 287 when it started pulling aside". Without this, the dataset would only contain
-         a flat list of independent vehicles with no information about who was next to whom,
-         which makes studying yielding behaviour harder.
+    For each vehicle in each exported frame, find up to six neighbours: the
+    preceding and following vehicle in its own lane and in each adjacent
+    lane, following the highD convention (Krajewski et al. 2018).
 
-    ByteTrack already gives every vehicle a unique ID. That tells us WHICH
-    vehicles exist, but NOT how they sit relative to each other on the road.
-    The highD dataset adds, for each vehicle, the IDs of its six neighbours.
+    The tracker's IDs say WHICH vehicles exist, not how they sit relative to
+    each other. Storing neighbour IDs lets later analysis reconstruct
+    relational interactions -- "vehicle 301 was behind vehicle 287 when it
+    started pulling aside" -- instead of reading the frame as a flat list of
+    independent vehicles.
 
-    HOW WE DECIDE WHO IS A NEIGHBOUR
-
-    We work in the real-world metre coordinates we already compute:
-        x_meters = lateral position (left/right across the road, + = right)
+    HOW A NEIGHBOUR IS DECIDED
+    Everything works in the metric coordinates already computed:
+        x_meters = lateral position (+ = right of the ambulance)
         y_meters = forward position (distance ahead of the ambulance)
+    Lane is decided by lateral gap (same lane if |gap| <= lane_width/2),
+    ahead vs behind by the sign of the forward gap, and the closest vehicle
+    in each of the six buckets wins.
 
-    Lane is decided by lateral position (x_meters),if lateral gap is inferior to lanewidth/2
-
-    In front vs behind is decided by forward position (y_meters):
-    a larger y_meters means further ahead.
-
-    LIMITATIONS
-    - Assumes a roughly straight road. On sharp curves "ahead" and "lane left"
-      get blurry. Acceptable for Autobahn( for now)
+    LIMITATION
+    Assumes a roughly straight road. On sharp curves "ahead" and "lane left"
+    get blurry — acceptable for the motorway footage in the released corpus.
     """
 
     # fallback only - lane_info from LaneConfig always provides the correct width
