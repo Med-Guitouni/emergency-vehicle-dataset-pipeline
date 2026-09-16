@@ -1,197 +1,190 @@
 # Emergency Vehicle Behaviour Dataset Pipeline
 
-A Python pipeline that processes YouTube dashcam videos from inside German
-ambulances on emergency runs and produces one JSON file per second
-describing every nearby vehicle's position, speed, and behaviour.
+Turns dashcam footage filmed inside German ambulances on emergency runs into
+a trajectory dataset: for every nearby vehicle, in every frame, where it is in
+metres, how fast it is moving relative to the ambulance, which lane it is in,
+who its neighbours are, and whether it yielded.
+
+Input: an `.mp4` in `videos/`.
+Output: `output/<video_name>/t000000.json …`, one file per exported frame.
+
+Tracking runs at 30 Hz. Records are exported at 5 Hz (every 6th tracked frame).
+
+For the maths behind the numbers, see [MATHS.MD](MATHS.MD).
 
 ---
 
-## Setup
+## Install
 
 ```bash
 pip3 install -U yt-dlp ultralytics opencv-python numpy torch torchvision
-brew install ffmpeg
+brew install ffmpeg          # or: apt install ffmpeg
 ```
 
-Confirm Ultralytics is up to date — BoT-SORT's `model: auto` field in
-`botsort.yaml` requires a recent version:
+Keep Ultralytics current — BoT-SORT's `model: auto` in `botsort.yaml` needs a
+recent version, and the ReID weights ship with the package. Nothing else to
+clone: no EMAP, no Depth Anything, no separate tracker repo.
 
-```bash
-pip install -U ultralytics
-```
-
-That's it. No EMAP, no Depth Anything V2, no extra repos to clone. Tracking
-is handled entirely by BoT-SORT, which ships with Ultralytics.
+A CUDA GPU is strongly recommended. `main.py` prints whether it found one
+before loading any model; on CPU, 30 Hz tracking is very slow.
 
 ---
 
-## Quick Start
+## Run it
+
+### 1. Get a video
 
 ```bash
-# 1. Download a video (full video)
 python3 -c "from downloader import VideoDownloader; VideoDownloader().download_single('URL')"
+```
 
-# OR download only a section of a video (saves bandwidth/disk):
+To grab only part of a long video (saves bandwidth and disk):
+
+```bash
 yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best" \
   --merge-output-format mp4 \
-  --download-sections "*START-END" \
+  --download-sections "*04:30-09:00" \
   -o "videos/your_video_name.%(ext)s" \
   "URL"
-# example: --download-sections "*04:30-09:00"
-
-# 2. Add the video to video_lanes.json (see Lane Config below) — required
-#    before processing, otherwise lane count falls back to a default guess
-#    and emergency state is never active.
-
-# 3. Run the pipeline
- python3 main.py
 ```
 
+A trimmed clip's timeline starts at 0, so all the times you write in the next
+step are relative to the clip, not the original video.
 
+### 2. Describe the road
 
-**Resuming**: if you stop the run (Ctrl+C, or quitting the review window),
-just rerun `caffeinate python3 main.py`. Any video that already has output
-in `output/<video_name>/` is skipped automatically — only unprocessed
-videos run. If a run was killed mid-processing (not mid-review) for a video,
-its `output/` folder won't exist yet, so it correctly reprocesses from
-scratch on the next run.
+Watch the video once and add an entry to `video_lanes.json`: how many lanes,
+what kind of road, and when the emergency run starts. This is the only manual
+input besides the labels. Format and rules are in
+[Lane config](#lane-config-video_lanesjson) below.
 
-Output: `output/<video_name>/t0000.json … t<N>.json`, one file per exported
-second.
+Skipping this step does not crash anything — you fall back to highway with
+three lanes, and every exported row is stamped
+`lane_source: "default_highway_3lane"` so you can tell afterwards.
+
+### 3. Process
+
+```bash
+python3 main.py                                   # every video in videos/
+python3 main.py --video video1                    # just one
+python3 main.py --video video1 --start 60 --end 180   # a 2-minute window
+```
+
+A windowed run writes to `output/video1_t60-180/`, so a test slice can never
+be confused with a full run. Lane and emergency lookups still use the real
+video name. The tracker starts cold at `--start` with no history, so expect
+extra ID churn in the first seconds of a window.
+
+**Stopping and resuming**: rerun the same command. Any video that already has
+files in `output/<video_name>/` is skipped. If a run was killed mid-video, its
+folder exists but is incomplete — delete it before relaunching.
+
+### 4. Label by hand
+
+```bash
+python3 review.py --video video1
+```
+
+This is the step that produces the real labels. See
+[Behaviour labels](#behaviour-labels) below.
 
 ---
 
-## What Happens When You Run It
+## What actually happens
 
-For each video found in `videos/`, in order:
+**Phase 1 — track.** Each frame is cropped (sky and dashboard removed),
+resized to 1280×720, and passed through YOLOv8x + BoT-SORT at 30 Hz. Every
+detection is projected onto the road plane to get an (x, y) position in
+metres. Every 6th frame is also kept as an export record.
 
-1. **Phase 1 — track & collect.** Frames are read at 5 Hz (5 times per
-   second) and fed through YOLOv8x + BoT-SORT for detection and tracking.
-   Every 5 Hz observation is converted to a real-world (x, y) position and
-   stored. Once per whole second, the cropped frame is also saved to
-   `review_data/` for later use in the review step.
-2. **RTS smoothing.** Once Phase 1 finishes the whole video, each vehicle's
-   complete trajectory (all its 5 Hz observations) is smoothed in one pass.
-3. **Phase 2 — compute & export.** Using the smoothed, whole-second
-   positions: speed, acceleration, jerk, time-to-collision, lane, and the
-   six surrounding-vehicle IDs are computed. Behaviour is labelled. One JSON
-   per second is written to `output/<video_name>/`.
-4. **Review window opens automatically.** See "Manual Review" below. You go
-   through every exported second, optionally correcting labels or deleting
-   bad boxes, then it moves to the next video in `videos/`.
+**Between phases — smooth.** When the video ends, each vehicle's full 30 Hz
+trajectory goes through an RTS smoother, once, per axis.
 
+**Phase 2 — measure and export.** From the smoothed positions: forward and
+lateral speed, acceleration, jerk, time-to-collision, lane, offsets, and the
+six neighbour IDs. An ego node for the ambulance itself is added to every
+frame. The kinematic rules assign a provisional behaviour label. One JSON per
+exported frame is written.
 
+**Then you review.** `main.py` does not open a review window; run `review.py`
+separately when a video finishes.
+
+```
+preprocessor → detector + tracker → homography → smoother → homography + surrounding + annotator → exporter → review
+ (30 Hz frames)  (YOLOv8x + BoT-SORT)  (pixels → metres)  (RTS)      (metrics, lanes, neighbours, rules)     (5 Hz JSON)  (labels)
+```
 
 ---
 
-## Manual Review
+## Behaviour labels
 
-After each video's JSON is written, an OpenCV window opens automatically
-showing every exported second with the pipeline's boxes and labels drawn on
-it, so you can correct mistakes by hand before moving to the next video.
+Four classes: `yielded`, `braked_abruptly`, `failed_to_yield`, `normal`.
 
-**Controls:**
+**The labels `main.py` writes are provisional.** They come from the kinematic
+rules in `annotator.py`, which are kept as a documented starting point for
+future automation but did not produce the released dataset. Two reasons: the
+thresholds come from different studies on different road types, sensor setups
+and sampling rates, so they are not mutually consistent; and there is no
+agreed kinematic definition of yielding to an emergency vehicle, because no
+prior work measures it directly. In practice the rules also miss partial
+manoeuvres, staged movements, and vehicles boxed in by surrounding traffic.
+
+Braking is the exception and stays rule-derived — you can confirm it by eye
+from brake lights, but you cannot measure a deceleration by eye.
+
+So: run `review.py` and label every frame. It draws each tracked vehicle with
+its ID and current kinematics, and writes your keystroke straight into the
+JSON.
 
 | Key | Action |
 |---|---|
 | `ENTER` / `SPACE` | Next frame |
-| `B` / Left arrow | Previous frame |
+| `←` | Previous frame |
 | Click a box | Select it (turns yellow) |
+| `Y` | `yielded` |
+| `F` | `failed_to_yield` |
+| `K` | `braked_abruptly` |
+| `N` | `normal` |
 | `D` | Delete the selected box |
-| `Y` | Set selected vehicle's behaviour to `yielded` |
-| `F` | Set selected vehicle's behaviour to `failed_to_yield` |
-| Type digits, then `ENTER`/`B`/`Q` | Change the selected vehicle's ID |
+| Type digits, then `ENTER` | Change the selected vehicle's ID |
 | `ESC` | Deselect |
-| `Q` | Quit review for this video (all changes already saved) — moves to next video |
+| `Q` | Quit (everything is already saved) |
 
-**Colours:** green = yielded, red = failed_to_yield, orange = braked_abruptly,
-white = normal, yellow = currently selected.
+Colours: green `yielded`, red `failed_to_yield`, orange `braked_abruptly`,
+white `normal`, yellow selected. Every change is written to disk immediately
+— there is no save step and no undo. The ego node (id 0) is hidden from the
+UI and written back untouched.
 
-Every change is saved directly back to the JSON file immediately — there's
-no separate "save" step, and no undo. Quitting (`Q`) does not discard
-anything; it just closes the window for that video and lets `main.py`
-continue to the next one (or finish, if it was the last video).
+<details>
+<summary>The rule thresholds, for reference</summary>
 
-To re-review a video later without reprocessing it:
-
-```bash
-python3 review.py --video video_name
-```
-
-(omit `--video` to review the first video found in `output/`)
-
----
-
-## Pipeline Architecture
-
-```
-preprocessor.py  →  detector.py + tracker.py  →  homography.py  →  smoother.py  →  homography.py (again) + surrounding.py + annotator.py  →  exporter.py  →  review.py
-   (5 Hz frames)        (YOLO + BoT-SORT)        (pixel → metres)    (RTS smooth)         (metrics, lanes, behaviour)                    (JSON)        (manual QA)
-```
-
-| File | What it does |
+| Label | Rule |
 |---|---|
-| `main.py` | Orchestrates Phase 1, smoothing, Phase 2, export, and review for every video |
-| `downloader.py` | Downloads videos via yt-dlp at best available quality |
-| `preprocessor.py` | Streams frames at a given Hz, crops sky/dashboard, resizes to 1280×720 |
-| `detector.py` | Loads YOLOv8x (conf ≥ 0.25 for cars, trucks, buses, motorcycles) |
-| `tracker.py` | BoT-SORT (appearance ReID + camera motion compensation) for stable IDs; also detects vehicles partially out of frame on the left/right edges |
-| `homography.py` | Ground-plane pinhole projection → metres, split velocity, acceleration, jerk, time-to-collision, lane assignment |
-| `smoother.py` | RTS smoother — runs once per video between Phase 1 and Phase 2 |
-| `annotator.py` | Labels vehicle behaviour using kinematic rules |
-| `scene_classifier.py` | MIT Places365 ResNet18 → highway / urban / intersection / roundabout (fallback only) |
-| `lane_config.py` | Reads `video_lanes.json` — manual ground-truth lane count and emergency timing |
-| `surrounding.py` | highD-style 6-neighbour IDs from metric positions |
-| `exporter.py` | Writes one JSON per second per video |
-| `review.py` | Manual QA window — corrects behaviour labels and deletes bad boxes after each video |
-| `count_reliability.py` | Standalone report on `position_reliable` flag accuracy across all output |
-| `visualize_pipeline.py` | Standalone — renders every second as an annotated debug frame (separate from `review.py`) |
-| `test_phase1.py` | Standalone — live tracking-only test on the first 60s of a video, prints unique ID count as a tracking-quality metric |
+| `yielded` | Lateral speed ≥ 0.5 m/s away from the ambulance's path, sustained ≥ 2 s; **or** cumulative monotonic lateral drift ≥ 0.8 m over 3 s; **or** contact with the road-boundary clamp (vehicle left the carriageway) |
+| `braked_abruptly` | Acceleration ≤ −2.5 m/s²; **or** ≤ −1.5 m/s² together with jerk ≤ −3.0 m/s³ (panic stop split across two frames) |
+| `failed_to_yield` | Within 20 m, seen for ≥ 3 s, nothing else fired |
+| `normal` | None of the above, or further than 50 m away |
 
-**Tracker config** (`botsort.yaml`): tuned for 1–5 Hz dashcam footage.
-`match_thresh: 0.75` (lenient IoU matching to survive large frame-to-frame
-box movement), `with_reid: True` (appearance matching — the main fix for ID
-churn), `gmc_method: none` (camera motion compensation is disabled due to a
-recurring OpenCV pyramid-size assertion error on this setup; ReID alone
-handles tracking quality well).
+Sources: Pierson et al. 2019 (lateral speed), Krajewski et al. 2018
+(cumulative window), Cortés & Stefoni 2023 — drivers react only when the
+emergency vehicle is in their own path, which is where the directional
+condition comes from.
+
+Heading-based rules were specified and dropped: resolving a few degrees of
+steering angle from a moving monocular camera is pure noise at this
+resolution. A speed-drop rule was dropped too — it used speed magnitude,
+which has the zero-crossing artifact already fixed for acceleration.
+</details>
 
 ---
 
-## Calibration Constants
+## Lane config (`video_lanes.json`)
 
-Set in `homography.py`, measured from the test video using Autobahn lane
-dash spacing (18 m period) and lane width (3.75 m) as physical rulers:
-
-| Constant | Value | Notes |
-|---|---|---|
-| `camera_height` | 1.4 m | Mean 1.40 m across 6 frames |
-| `focal_length_factor` | 0.72 | focal_px = frame_width × 0.72 |
-| `horizon_ratio` | 0.60 | Fraction down the cropped frame where horizon sits |
-| `CX_RATIO` | 0.47 | Optical centre column as fraction of frame width |
-
-
-
----
-
-## Lane Config (`video_lanes.json`)
-
-Every video needs a manual entry before processing. This is the only
-required manual input.
+One JSON object, one top-level key per video. Don't create separate files or
+separate `{ }` blocks.
 
 ```json
 {
-  "20240720_einsatz_1080p": {
-    "emergency_start_second": 0,
-    "lanes": [
-      {
-        "from_second": 0,
-        "to_second": 930,
-        "lanes": 3,
-        "road_type": "highway",
-        "notes": "A2 Autobahn, 3 lanes"
-      }
-    ]
-  },
   "video1": {
     "emergency_start_second": 0,
     "lanes": [
@@ -200,133 +193,225 @@ required manual input.
         "to_second": 270,
         "lanes": 3,
         "road_type": "highway",
-        "notes": "highway, 3 lanes, full clip"
+        "notes": "A2 Autobahn, 3 lanes, full clip"
       }
     ]
   }
 }
 ```
 
-All videos live in **one** JSON object — add a new top-level key per video,
-don't create separate files or separate `{ }` blocks.
-
-`video_name` (the key) must exactly match
-`os.path.splitext(os.path.basename(video_path))[0][:30]` — for
-`videos/video1.mp4` that's `"video1"`.
-
-Lane widths are automatic from road type (RASt 06): highway → 3.75 m,
-urban → 3.00 m — don't write widths yourself.
-
-Emergency is latched: once `emergency_start_second` is reached, it stays
-active for the rest of that video's timeline.
-
-If a video is downloaded as a trimmed section (via `--download-sections`),
-its timeline starts at 0 regardless of where the clip began in the original
-video — `from_second`/`to_second`/`emergency_start_second` should all be
-relative to the trimmed clip, not the original video.
+- **The key must match the video filename** as
+  `os.path.splitext(os.path.basename(path))[0][:30]` — for
+  `videos/video1.mp4` that's `"video1"`. Note the 30-character truncation:
+  long YouTube titles get cut.
+- **Add a window per change.** If the ambulance leaves the Autobahn at 7:30,
+  write two windows with `to_second` / `from_second` at 450.
+- **Don't write lane widths.** They follow from `road_type` per the German
+  standards: `highway` → 3.75 m, `urban` / `intersection` / `roundabout` →
+  3.00 m.
+- **Emergency is latched.** Once `emergency_start_second` is reached it stays
+  active for the rest of the clip. A video with no entry defaults to active,
+  since this footage is curated to be during a run.
 
 ---
 
-## JSON Output
+## Output format
 
 ```json
 {
   "timestamp":        ,   // seconds from this video's start
   "video_source":     ,   // video filename (truncated to 30 chars)
   "emergency_active": ,   // true once emergency_start_second is reached
-  "scenario_type":    ,   // highway / urban / intersection / roundabout (scene classifier)
-  "vehicles": [
-    {
-      "id":                  ,  // stable ID assigned by BoT-SORT
-      "type":                ,  // car / truck / bus / motorcycle
-      "x_meters":            ,  // lateral position in metres. + = right of ambulance, - = left
-      "y_meters":            ,  // forward distance in metres from ambulance
-      "position_reliable":   ,  // false when bbox is clipped at frame edge (see below)
-      "speed_kmh":           ,  // overall speed magnitude in km/h — RELATIVE to ambulance
-      "forward_speed_ms":    ,  // speed along road in m/s. + = moving away, - = ego catching up
-      "lateral_speed_ms":    ,  // speed across road in m/s. + = right, - = left. Direct yielding signal
-      "acceleration":        ,  // change in forward_speed_ms per second (m/s²). Negative = braking
-      "jerk":                ,  // change in acceleration per second (m/s³). High = panic stop
-      "ttc_to_ego":          ,  // seconds until this vehicle reaches the ambulance, if ahead and closing. null otherwise
-      "lane_id":             ,  // lane number 1 (left) to N (right)
-      "lateral_offset":      ,  // distance from lane centre in metres. + = right of centre
-      "distance_to_ego":     ,  // straight-line distance to ambulance: sqrt(x² + y²)
-      "lanes_total":         ,  // total lanes on this road at this timestamp
-      "road_type":           ,  // highway / urban / intersection / roundabout
-      "lane_source":         ,  // "config" = from video_lanes.json, "scene_classifier" = fallback
-      "preceding_id":        ,  // ID of vehicle directly ahead in same lane
-      "following_id":        ,  // ID of vehicle directly behind in same lane
-      "left_preceding_id":   ,  // ID of vehicle ahead-left
-      "left_following_id":   ,  // ID of vehicle behind-left
-      "right_preceding_id":  ,  // ID of vehicle ahead-right
-      "right_following_id":  ,  // ID of vehicle behind-right
-      "behaviour":           ,  // normal / yielded / braked_abruptly / failed_to_yield
-      "bbox":                   // [x1, y1, x2, y2] pixels in the cropped frame
-    }
-  ]
+  "scenario_type":    ,   // road scene category
+  "vehicles": [ ... ]
 }
 ```
 
-Heading is not computed or exported — earlier attempts at a 1 Hz heading
-estimate produced unreliable values across several different
-implementations and were removed rather than published as a noisy field.
+Each entry in `vehicles`:
 
----
-
-## Position Reliability
-
-Every observation includes `position_reliable` (true/false). The
-ground-plane projection uses only the bottom row of the bounding box (where
-tyres meet road). Three cases break this assumption and are flagged
-unreliable:
-
-- **Bottom clipped**: tyres below the crop — projection input missing
-- **Side clipped**: vehicle half out of frame — lateral centre of visible
-  box is not vehicle centre
-- **Lateral clamp fired**: computed position exceeds physical road boundary
-
-Top-clipped boxes (roof out of frame, tyres visible) are **reliable** — the
-formula only uses the bottom row.
-
-Unreliable rows are kept in the dataset, not deleted. The RTS smoother
-assigns them 25× lower measurement weight so the motion model interpolates
-instead of trusting the bad measurement.
-
-Run `python3 count_reliability.py` after processing to get a breakdown by
-vehicle type, distance bucket, and track ID, plus a dump of every
-unreliable observation's x/y position for manual sanity-checking.
-
----
-
-## Behaviour Labels
-
-Labels are assigned by `annotator.py` only when `emergency_active = true`
-and the vehicle is within 50 m.
-
-| Label | Condition |
+| Field | Meaning |
 |---|---|
-| `yielded` | Lateral speed ≥ 0.5 m/s, directed away from the ambulance's path, sustained for ≥ 2 consecutive frames, OR cumulative lateral drift ≥ 0.8 m over 3 s monotonically in one direction |
-| `braked_abruptly` | Acceleration ≤ −2.5 m/s², OR acceleration ≤ −1.5 m/s² AND jerk ≤ −3.0 m/s³ |
-| `failed_to_yield` | Within 20 m, ≥ 3 frames of history, nothing else triggered |
-| `normal` | None of the above |
+| `id` | Stable ID from BoT-SORT. **0 is the ego**, the ambulance itself |
+| `type` | `car` / `truck` / `bus` / `motorcycle`, or `ego` |
+| `x_meters` | Lateral position. **+ = right** of the ambulance |
+| `y_meters` | Forward distance ahead of the ambulance |
+| `position_reliable` | `false` when the box was clipped or the lateral clamp fired — see below |
+| `speed_kmh` | Overall speed magnitude, **relative to the ambulance** |
+| `forward_speed_ms` | Along the road. + = pulling away, − = ambulance closing |
+| `lateral_speed_ms` | Across the road. + = right. **The direct yielding signal** |
+| `acceleration` | Change in `forward_speed_ms` over a 1 s window (m/s²). `null` until the window fills |
+| `lateral_acceleration` | Same window, lateral component |
+| `jerk` | Change in acceleration over the same window (m/s³) |
+| `ttc_to_ego` | Seconds to the ambulance if ahead and closing; `null` otherwise (never infinity) |
+| `lane_id` | 1 (leftmost) to N (rightmost) |
+| `lateral_offset` | Metres from that lane's centreline. + = right of centre |
+| `lane_position_norm` | −1…+1 within its own lane: 0 = centre, ±1 = lane edge |
+| `road_position_norm` | −1…+1 across the whole road: ±1 = road edge / shoulder |
+| `distance_to_ego` | √(x² + y²) |
+| `lanes_total`, `road_type` | Road layout at this timestamp |
+| `lane_source` | `"config"` = from `video_lanes.json`; `"default_highway_3lane"` = fallback |
+| `preceding_id`, `following_id` | Nearest vehicle ahead / behind in the same lane |
+| `left_*`, `right_*` | Same, in the adjacent lanes (highD convention) |
+| `behaviour` | The label, or `ego` |
+| `bbox` | `[x1, y1, x2, y2]` in the cropped frame; `null` for the ego |
 
-Thresholds: Pierson et al. 2019 (lateral speed), Krajewski et al. 2018
-(cumulative window). A vehicle moving sideways toward the ambulance's path
-(rather than away from it) is not counted as yielding, per Cortés &
-Stefoni (2023), who found drivers only react when the emergency vehicle is
-actually in or near their own path.
+Two notes for anyone training on this:
 
-Heading-based rules from earlier versions of the annotator were removed —
-see "JSON Output" above.
+- **All speeds are relative to the ambulance**, not absolute. A vehicle
+  travelling at exactly the ambulance's speed reads ≈ 0, not its road speed.
+- `lane_position_norm` and `road_position_norm` exist for MTP-GO
+  compatibility: they mean the same thing whether a lane is 3.00 m or 3.75 m
+  wide, and they separate "moved onto the shoulder" from "changed lane". The
+  ego node is emitted in every frame with the same schema so a graph model
+  always has an ego vertex; its `bbox` and `ttc_to_ego` are structurally null.
+
+Heading is not computed or exported.
 
 ---
 
-## Known Limitations
+## How much to trust a row
 
-**Speeds are relative only.** All velocities are relative to the ambulance,
-not absolute. A vehicle matching the ambulance's speed reads ~0; one being
-overtaken reads negative forward speed.
+Every observation carries `position_reliable`. The projection uses only the
+bottom edge of the bounding box, where the tyres meet the road, so anything
+that breaks that gets flagged:
 
+- **Bottom clipped** — tyres below the crop, the input is missing
+- **Side clipped** — vehicle half out of frame, so the visible box's centre is
+  not the vehicle's centre
+- **Lateral clamp fired** — the computed position is off the physical road
+- **Near the horizon with a tiny box** — under 15 px tall, where even the
+  fallback estimator carries ~20% error
+
+Top-clipped boxes (roof cut off, tyres visible) are **reliable** — the formula
+only uses the bottom row.
+
+Unreliable rows are kept, not deleted: the smoother gives them 25× the
+measurement variance, so the motion model takes over instead of following a
+bad measurement. Filter on the flag if you need precision.
+
+Accuracy falls off with distance, and faster than linearly: forward-distance
+error is under 1 m within 10 m and around 12 m in the 45–60 m band. That is
+the geometry, not a bug — a fixed pixel error becomes a metric error scaling
+roughly with the square of distance, and every monocular ground-plane pipeline
+behaves this way. The practical consequence: the data is dependable for
+close-range interaction, which is where yielding happens, and progressively
+less so with distance.
+
+```bash
+python3 count_reliability.py    # breakdown by type, distance and track ID
+```
+
+---
+
+## Calibration
+
+Four constants in `homography.py`, all measured from the footage rather than
+guessed, using two things German regulation fixes as physical rulers:
+Autobahn lane width (3.75 m) and the lane-dash period (18 m = 6 m stripe +
+12 m gap). Raw per-frame measurements are in `calibration_log.json`.
+
+| Constant | Value | Spread | Measured from |
+|---|---|---|---|
+| `camera_height` | 1.40 m | 1.27–1.72 | Lane width |
+| `focal_length_factor` | 0.72 | 0.41–1.18 | Dash spacing (least squares, max residual < 4 px) |
+| `horizon_ratio` | 0.60 | 0.549–0.619 | Vanishing point |
+| `CX_RATIO` | 0.47 | 0.459–0.519 | Vanishing point |
+
+Height and focal length both scale distance linearly, which is why lane width
+and dash spacing are two separate measurements — one distance check cannot
+separate them.
+
+If you process footage from a different camera, these are the numbers to
+re-measure. The horizon ratio drifts within a single video in a way that looks
+like real road grade rather than measurement error; a single compromise value
+is used and the residual is documented, not removed.
+
+---
+
+## File map
+
+| File | What it does |
+|---|---|
+| `main.py` | Runs both phases and the export for every video |
+| `downloader.py` | yt-dlp wrapper |
+| `preprocessor.py` | Streams frames at a given Hz, crops, resizes to 1280×720 |
+| `detector.py` | Loads YOLOv8x, picks CPU/CUDA |
+| `tracker.py` | BoT-SORT: appearance ReID + camera-motion compensation |
+| `homography.py` | Pixels → metres, plus velocity, distance, TTC, lanes, offsets |
+| `smoother.py` | RTS smoother, once per video between the phases |
+| `annotator.py` | Provisional kinematic labels |
+| `lane_config.py` | Reads `video_lanes.json` |
+| `surrounding.py` | Six neighbour IDs, highD convention |
+| `exporter.py` | Writes the JSON |
+| `review.py` | Manual labelling window |
+| `count_reliability.py` | Reliability report over all output |
+| `visualize_pipeline.py` | Renders one annotated debug frame per second |
+| `validate_nuscenes_phaseA.py` | Projection accuracy vs nuScenes ground truth |
+| `validate_nuscenes_phaseB.py` | Speed accuracy (project → smooth → velocity) vs nuScenes |
+| `botsort.yaml` | Tracker config — read the header before changing `TRACK_FPS` |
+| `calibration_log.json` | Per-frame calibration measurements |
+
+---
+
+## Validation
+
+The two `validate_nuscenes_*` scripts feed nuScenes 3D boxes and real
+per-frame calibration into this pipeline's own projection code, so the only
+thing under test is the geometry and the smoother, isolated from detection and
+tracking error. Smoothing cuts forward-speed error from 3.74 to 2.14 m/s and
+lateral-speed error from 0.76 to 0.53 m/s on the straight-line subset.
+
+What this does **not** measure is detection and tracking error from the
+YOLOv8x/BoT-SORT stage, which stays a separate, unquantified source of error.
+
+---
+
+## Known limitations
+
+**Speeds are relative, not absolute.** Recovering the ambulance's own speed
+needs GPS, an odometer or an IMU, none of which the footage has. Three
+vision-only estimators were tried against nuScenes and all three failed, with
+biases in opposite directions: in dense traffic the visible road surface is
+mostly covered by vehicles moving at roughly the ambulance's speed, so the
+flow signal every estimator depends on is masked. A road-segmentation-gated
+estimator is the open direction.
+
+**The road is assumed flat.** The measured horizon ratio shifts within a
+video, consistent with real grade; the compromise value leaves a residual
+error.
+
+**Tracks fragment.** Exported tracks are shorter and more numerous than the
+real vehicle count. The cause is identified rather than open: roughly 70% of
+track terminations happen because no detection existed at that spot at all,
+not because association failed — no tracker setting can link a detection that
+was never produced. The vehicles that get lost are small, distant and sitting
+essentially on the horizon line, which is the same physical limit that drives
+the distance error above. The fix is higher-resolution inference or a detector
+fine-tuned on small distant vehicles. If you need continuous trajectories,
+filter on track length.
+
+---
+
+## Troubleshooting
+
+**Every row says `lane_source: "default_highway_3lane"`.** The video isn't in
+`video_lanes.json`, or its key doesn't match the filename truncated to 30
+characters.
+
+**`CUDA available: NO`.** Torch was installed without CUDA support.
+Reinstall it from the PyTorch index for your CUDA version; 30 Hz tracking on
+CPU is impractically slow.
+
+**OpenCV pyramid-size assertion from the tracker.** Camera-motion
+compensation needs a constant frame size. `preprocessor.spatial_crop`
+guarantees that by resizing every frame to 1280×720 — if you change the crop,
+keep the fixed resize.
+
+**A video is skipped.** It already has files in `output/<video_name>/`. Delete
+the folder to reprocess.
+
+**IDs churn in the first seconds of a windowed run.** Expected: the tracker
+starts cold at `--start` with no history. Not a property of full runs.
 
 
 
