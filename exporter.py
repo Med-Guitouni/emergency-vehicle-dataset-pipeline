@@ -73,7 +73,9 @@ class JSONExporter:
                 "distance_to_ego":   v.get("distance_to_ego", 0.0),
                 "lanes_total":       v.get("lanes_total", 3),
                 # "config" = manual annotation in video_lanes.json;
-                # "default_highway_3lane" = fallback for an unannotated video
+                # "scene_classifier" = CNN fallback for an unannotated segment;
+                # "default_highway_3lane" = no annotation and no confirmed
+                # classifier prediction
                 "road_type":         v.get("road_type", "unknown"),
                 "lane_source":       v.get("lane_source", "unknown"),
                 # highD-style surrounding vehicle IDs (None if no neighbour)
