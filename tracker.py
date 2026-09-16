@@ -1,52 +1,23 @@
-import numpy as np
-import cv2
-from ultralytics import YOLO
-
-
 class VehicleTracker:
     """
-    YOLO detection + BoT-SORT tracking.
+    YOLOv8x detection + BoT-SORT tracking at TRACK_FPS (30 Hz, see main.py).
 
-    WHY BoT-SORT INSTEAD OF BYTETRACK + EMAP
-    -----------------------------------------
-    At 1 Hz, the ambulance moves ~30 m between frames. ByteTrack matches
-    detections purely by bounding-box overlap (IoU). At 1 Hz the predicted
-    box position is almost never close enough to the new detection for a
-    good IoU match, so the same vehicle gets a new ID every second.
+  
 
-    The previous fix (EMAP) was supposed to compensate for ego-motion before
-    the Kalman predict step, but it ran AFTER ByteTrack's internal association
-    had already finished — too late to improve matching at all.
 
-    BoT-SORT (Aharon et al. 2022, arXiv 2206.14651) solves this correctly:
-      1. ReID appearance model — matches vehicles by what they look like, not
-         just where they are predicted to be. A vehicle that moved 30 m in
-         1 s is still recognised by appearance and keeps its ID.
-      2. Camera-motion compensation (CMC) via optical flow — built in and
-         integrated before matching, unlike the broken EMAP setup.
+      1. ReID appearance model -- a vehicle is recognised by what it looks
+         like from frame to frame, so association does not depend on
+         modelling the camera's own motion at all.
+      2. Camera-motion compensation via sparse optical flow, built in and
+         applied before matching, and lighter-weight than a full
+         depth-conditioned correction.
 
-    Usage: change tracker="bytetrack.yaml" -> tracker="botsort.yaml".
-    Ultralytics ships botsort.yaml and the ReID weights; nothing extra to
-    install. Track confidence and IoU thresholds remain the same.
+    Config lives in botsort.yaml; Ultralytics ships the tracker and its ReID
+    weights, so nothing extra needs installing.
     """
 
     def __init__(self):
         print("BoT-SORT tracker ready")
-        self._config_checked = False
-
-    @staticmethod
-    def _iou(boxA, boxB):
-        """Intersection-over-Union between two [x1,y1,x2,y2] boxes."""
-        xA = max(boxA[0], boxB[0])
-        yA = max(boxA[1], boxB[1])
-        xB = min(boxA[2], boxB[2])
-        yB = min(boxA[3], boxB[3])
-        inter = max(0, xB - xA) * max(0, yB - yA)
-        if inter == 0:
-            return 0.0
-        aA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-        aB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-        return inter / float(aA + aB - inter)
 
     def update(self, model, frame, device=None):
         """
@@ -57,8 +28,7 @@ class VehicleTracker:
         device: "cuda" or "cpu" -- pass detector.py's VehicleDetector.device
                 here so tracking runs on the same device the model was
                 loaded to. If None, ultralytics falls back to its own
-                auto-detection (usually fine, but explicit is safer -- see
-                detector.py's docstring).
+                auto-detection (usually fine, but explicit is safer).
 
         Returns list of dicts, one per tracked vehicle:
             track_id, type, bbox [x1,y1,x2,y2], center [cx,cy]
@@ -71,11 +41,8 @@ class VehicleTracker:
             device=device,
         )[0]
 
-        if not self._config_checked:
-            self._config_checked = True
-            self._print_tracker_config(model)
-
         VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+        MIN_CONFIDENCE = 0.25
 
         tracked = []
         for box in results.boxes:
@@ -84,7 +51,7 @@ class VehicleTracker:
             class_id = int(box.cls[0])
             if class_id not in VEHICLE_CLASSES:
                 continue
-            if float(box.conf[0]) < 0.25:
+            if float(box.conf[0]) < MIN_CONFIDENCE:
                 continue
 
             x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -96,54 +63,3 @@ class VehicleTracker:
             })
 
         return tracked
-
-    def _print_tracker_config(self, model):
-        """
-        STEP 1 VERIFICATION (config-loading investigation): reads the ACTUAL
-        config values back off the live tracker object Ultralytics
-        instantiated -- not by re-parsing botsort.yaml ourselves, which only
-        proves the file is well-formed, not that these are the values the
-        matcher is actually using. Runs once, on the first tracking call,
-        so this prints at the very start of processing the first video.
-
-        If any of these do not match what's in botsort.yaml, the config is
-        not being applied and every tracker-parameter experiment run so far
-        (track_buffer, match_thresh) needs to be treated as invalid.
-        """
-        try:
-            predictor = getattr(model, "predictor", None)
-            trackers = getattr(predictor, "trackers", None) if predictor else None
-            print("  " + "=" * 62)
-            if not trackers:
-                print("  [CONFIG CHECK] FAILED: model.predictor.trackers not found.")
-                print("  Cannot verify which config is actually in effect.")
-                print("  " + "=" * 62)
-                return
-
-            tracker_obj = trackers[0]
-            args = getattr(tracker_obj, "args", None)
-            print("  [CONFIG CHECK] Live values read from the actual tracker object:")
-            if args is not None:
-                print(f"    track_buffer      = {getattr(args, 'track_buffer', 'MISSING')}"
-                      f"   (botsort.yaml currently says 5)")
-                print(f"    match_thresh      = {getattr(args, 'match_thresh', 'MISSING')}"
-                      f"   (botsort.yaml currently says 0.50)")
-                print(f"    with_reid         = {getattr(args, 'with_reid', 'MISSING')}"
-                      f"   (botsort.yaml currently says True)")
-                print(f"    appearance_thresh = {getattr(args, 'appearance_thresh', 'MISSING')}"
-                      f"   (botsort.yaml currently says 0.25)")
-                print(f"    proximity_thresh  = {getattr(args, 'proximity_thresh', 'MISSING')}"
-                      f"   (botsort.yaml currently says 0.5)")
-            else:
-                print("    WARNING: tracker object has no .args attribute at all")
-
-            max_time_lost = getattr(tracker_obj, "max_time_lost", "MISSING")
-            print(f"    max_time_lost (derived) = {max_time_lost}"
-                  f"  (raw call count, NOT seconds -- see botsort.yaml header)")
-            print("  " + "=" * 62)
-            print("  If track_buffer above reads 5, the YAML IS being applied.")
-            print("  If it reads 90 (or anything else), the YAML is NOT being")
-            print("  applied and every prior track_buffer/match_thresh test is invalid.")
-            print("  " + "=" * 62)
-        except Exception as e:
-            print(f"  [CONFIG CHECK] Could not verify: {e}")
