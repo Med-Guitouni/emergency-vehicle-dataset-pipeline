@@ -10,10 +10,7 @@ class HeuristicAnnotator:
 
 
 
-    Outdated : thresholds need recalibration if we want automatic use .
-                Manual review will replace it
-
-
+                              Legacy 
 
 
 
@@ -24,44 +21,62 @@ class HeuristicAnnotator:
     ─────────────────────────────────────────────────────────────────────────
 
     ─────────────────────────────────────────────────────────────────────────
-    BRAKING RULES (take priority over yield rules-manual review cant detect barking)
+   
+    Kinematic behaviour rules — a documented starting point for automation,
+    NOT the source of the released labels.
+
+    The released corpus is labelled by hand in review.py, for two reasons.
+    The thresholds below come from separate studies on different road types,
+    sensor setups and sampling rates, so they are not mutually consistent;
+    and more fundamentally there is no agreed kinematic definition of
+    yielding to an emergency vehicle, since no prior work measures the
+    behaviour directly. In practice the rules also miss partial manoeuvres,
+    staged movements, and vehicles constrained by surrounding traffic.
+
+    Braking is the exception that stays useful: it is rule-derived and can be
+    confirmed by eye from brake lights during review.
+
+
     ─────────────────────────────────────────────────────────────────────────
-    BRAKE     — acceleration ≤ −2.5 m/s²
-                (converging value across braking literature)
-    BRAKE ONSET — acceleration ≤ −1.5 m/s² AND jerk ≤ −3.0 m/s³
-                  catches a panic stop split across two 1 Hz frames.
+    BRAKING RULES (take priority over yield rules)
+    ─────────────────────────────────────────────────────────────────────────
+    BRAKE       — acceleration <= -2.5 m/s²
+                  (converging value across braking literature)
+    BRAKE ONSET — acceleration <= -1.5 m/s² AND jerk <= -3.0 m/s³,
+                  catching a panic stop split across two exported frames.
 
     ─────────────────────────────────────────────────────────────────────────
     YIELD RULES
     ─────────────────────────────────────────────────────────────────────────
-    RULE 1 — SUSTAINED lateral speed ≥ 0.5 m/s for ≥ YIELD_PERSIST consecutive
-             EXPORTED frames, AND the motion is AWAY from x = 0 (the
-             ambulance's path).
+    RULE 1 — SUSTAINED lateral speed >= 0.5 m/s for >= YIELD_PERSIST
+             consecutive exported frames, AND the motion is AWAY from x = 0
+             (the ambulance's path). Threshold: Pierson et al. 2019 (highD).
+             The directional condition follows Cortés and Stefoni (2023),
+             who find drivers react only when the emergency vehicle is in
+             their own path.
 
-             Threshold: Pierson et al. 2019 (highD German highway).
-
-
-    RULE 3 — cumulative lateral ≥ 0.8 m over CUMULATIVE_WINDOW, monotonic
-             Window: highD lane-change durations (Krajewski et al. 2018);
+    RULE 3 — cumulative lateral >= 0.8 m over CUMULATIVE_WINDOW, monotonic.
+             Window from highD lane-change durations (Krajewski et al. 2018);
              0.8 m threshold empirical.
 
-    RULE X — OUT OF ROAD BOUNDARY (x_meters at the lateral clamp limit)
-
+    RULE X — contact with the road-boundary clamp, i.e. a vehicle leaving the
+             carriageway onto the shoulder.
 
     ─────────────────────────────────────────────────────────────────────────
     FAILED-TO-YIELD
     ─────────────────────────────────────────────────────────────────────────
-    Within 20 m, observed for ≥ MIN_OBSERVED_FRAMES (export frames), nothing
+    Within 20 m, observed for >= MIN_OBSERVED_FRAMES exported frames, nothing
     triggered.
 
     ─────────────────────────────────────────────────────────────────────────
-    REMOVED RULES
+    DISCARDED RULES
     ─────────────────────────────────────────────────────────────────────────
-    Rule 2 (heading ≥ 15°) and Rule 5 (heading increasing 3 frames) were
-    removed
+    Two heading-change rules were specified and dropped: heading requires
+    resolving a steering angle of a few degrees from a moving monocular
+    camera, which is dominated by noise at the achievable angular resolution.
 
-    Rule 4 (speed drop ≥ 5 km/h) was removed. It operated on speed_kmh (a
-    magnitude), which carries the zero-crossing artifact already fixed for
+    A speed-drop rule (>= 5 km/h) was dropped too. It operated on speed_kmh,
+    a magnitude, which carries the zero-crossing artifact already fixed for
     acceleration.
     """
 
