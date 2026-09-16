@@ -1,3 +1,54 @@
+"""
+Pipeline — two phases, 30 Hz tracking / 5 Hz export.
+
+TRACK_FPS = 30, EXPORT_FPS = 5. Tracking runs denser than export: every 6th
+raw tracking frame becomes an export record. TRACK_FPS must be an integer
+multiple of EXPORT_FPS (asserted below) so export frame selection can use
+simple frame-count arithmetic instead of float-timestamp tolerance
+comparisons.
+
+PHASE 1 (track at 30 Hz, export every 6th frame at 5 Hz)
+  - Crop sky and dashboard, resize to fixed 1280x720
+  - Detect vehicles (YOLOv8x), track with BoT-SORT at 30 Hz
+  - Every raw frame: project bounding boxes to metres, feed track_obs so the
+    RTS smoother sees the full 30 Hz trajectory.
+  - Only on export frames (every 6th raw frame): store a record for export.
+  - Lane/emergency lookups are recomputed only when the whole real second
+    changes and reused across every frame within it -- independent of both
+    TRACK_FPS and EXPORT_FPS.
+
+BETWEEN PHASES — RTS SMOOTHING
+  Full 30 Hz trajectory per vehicle smoothed with the RTS smoother.
+
+PHASE 2 (over the 5 Hz export records, after smoothing)
+  - Derive split velocity, longitudinal and lateral acceleration, jerk and
+    TTC to ego using the REAL elapsed time between consecutive EXPORTED
+    observations of a track (dt), floored at 1/EXPORT_FPS (0.2 s) -- NOT
+    1/TRACK_FPS. Phase 2 operates over export records only, so consecutive
+    observations of the same track are ~1/EXPORT_FPS apart. Using the wrong
+    floor here would silently distort every speed value, the same class of
+    bug fixed previously when export was still at 1 Hz.
+  - Assign lane and surrounding-vehicle IDs from metric positions
+  - Apply the kinematic behaviour rules
+  - Write one JSON per exported frame to output/video_name/
+
+BEHAVIOUR LABELS. The labels this file writes are the kinematic-rule output
+of annotator.py. They are a starting point, not the released labels: the
+released corpus is labelled by hand in review.py, which overwrites the
+behaviour field in place. Braking is the exception -- it stays rule-derived,
+since it can be confirmed visually from brake lights but not measured by eye.
+No review tool is launched from here; run review.py separately after a video
+finishes.
+
+ANNOTATOR THRESHOLD NOTE: annotator.py's frame-count constants (YIELD_PERSIST,
+CUMULATIVE_WINDOW, MIN_OBSERVED_FRAMES) are expressed in EXPORT frames, since
+annotate() is only ever called once per exported observation (Phase 2, below).
+See annotator.py's docstring.
+
+Manual inputs (video_lanes.json): lane count per time window, road type,
+emergency_start_second.
+"""
+
 import os
 import torch
 
@@ -10,70 +61,6 @@ from annotator import HeuristicAnnotator
 from surrounding import SurroundingVehicles
 from lane_config import LaneConfig
 from smoother import RTSSmoother
-
-
-
-"""
-
-
-
-____________________________________________________________________________________________
-Cristian
-____________________
-
-
-
-
-
-
-
-Pipeline — two phases, 30 Hz tracking / 5 Hz export, no manual review.
-
-TRACK_FPS = 30, EXPORT_FPS = 10 -- decoupled again (unlike an intermediate
-version of this file which ran both at 30Hz). Tracking runs denser than
-export: every 3rd raw tracking frame becomes an export record. TRACK_FPS
-must be an integer multiple of EXPORT_FPS (asserted below) so export frame
-selection can use simple frame-count arithmetic instead of float-timestamp
-tolerance comparisons.
-
-PHASE 1 (track at 30 Hz, export every 3rd frame at 10 Hz)
-  - Crop sky and dashboard, resize to fixed 1280x720
-  - Detect vehicles (YOLOv8x), track with BoT-SORT at 30 Hz
-  - Every raw frame: project bounding boxes to metres, feed track_obs so the
-    RTS smoother sees the full 30 Hz trajectory.
-  - Only on export frames (every 3rd raw frame): store a record for export.
-  - Scene classification (CNN) and lane/emergency lookup are recomputed only
-    when the whole real second changes, and reused across every frame within
-    it -- independent of both TRACK_FPS and EXPORT_FPS, since re-running a
-    CNN faster than the scene can plausibly change would be pure waste.
-
-BETWEEN PHASES — RTS SMOOTHING
-  Full 30 Hz trajectory per vehicle smoothed with the RTS smoother.
-
-PHASE 2 (over the 10 Hz export records, after smoothing)
-  - Derive split velocity, longitudinal acceleration, jerk, TTC to ego using
-    the REAL elapsed time between consecutive EXPORTED observations of a
-    track (dt), floored at 1/EXPORT_FPS (~0.1s) -- NOT 1/TRACK_FPS. Phase 2
-    operates over export records only, so consecutive observations of the
-    same track are ~1/EXPORT_FPS apart, not ~1/TRACK_FPS apart. Using the
-    wrong floor here would have silently distorted every speed value again,
-    the same class of bug fixed previously when export was still at 1Hz.
-  - Assign lane and surrounding-vehicle IDs from metric positions
-  - Label behaviour
-  - Write one JSON per exported frame to output/video_name/
-
-NO MANUAL REVIEW OF ANY KIND. Neither intermediate_review.py nor review.py
-is imported or called from here. This is a fully automatic, unreviewed run.
-
-ANNOTATOR THRESHOLD NOTE: annotator.py's frame-count constants (YIELD_PERSIST,
-CUMULATIVE_WINDOW, MIN_OBSERVED_FRAMES) are calibrated in terms of EXPORT
-frames, since annotate() is only ever called once per exported observation
-(Phase 2, below) -- they were rescaled for EXPORT_FPS=5, not TRACK_FPS=30.
-See annotator.py's docstring.
-
-Manual inputs (video_lanes.json): lane count per time window, road type,
-emergency_start_second.
-"""
 
 TRACK_FPS  = 30
 EXPORT_FPS = 5
@@ -126,11 +113,11 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     # =================================================================
     # PHASE 1 — track at 30 Hz, export every EXPORT_INTERVAL_FRAMES-th frame
     # =================================================================
-    records   = []   # one entry per EXPORTED frame (10 Hz)
+    records   = []   # one entry per EXPORTED frame (5 Hz)
     track_obs = {}   # track_id -> [(timestamp_float, x, y, reliable)]  (ALL 30Hz obs)
 
     frame_idx  = 0    # raw tracking frame counter (30 Hz)
-    export_idx = 0    # export record counter (10 Hz) -- used for JSON filenames
+    export_idx = 0    # export record counter (5 Hz) -- used for JSON filenames
     cached_second               = None
     cached_scenario_type        = None
     cached_lane_info            = None
@@ -148,11 +135,11 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
         tracked = t.update(d.model, frame, device=d.device)
 
         # lane/emergency lookups: recompute only on crossing into a new
-        # whole second, reuse for every raw frame within it. scenario_type
-        # is hardcoded to "highway" -- scene classifier removed since
-        # lane_config.py's fallback always returns highway/3-lane
-        # regardless of scene_type anyway, so classifying was wasted CNN
-        # compute for a value nothing used.
+        # whole second, reuse for every raw frame within it. scenario_type is
+        # fixed to "highway": the released corpus is motorway footage
+        # throughout, and lane_config.py's fallback returns highway/3-lane
+        # regardless of scene type, so a per-frame scene classifier produced
+        # a value nothing consumed.
         if whole_second != cached_second:
             cached_second               = whole_second
             cached_scenario_type        = "highway"
@@ -205,39 +192,32 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     # =================================================================
     # SEED homography state from the smoothed trajectory BEFORE Phase 2
     # =================================================================
-    # estimate_acceleration()/estimate_jerk() store previous speed/accel
-    # in h.prev_speeds / h.prev_accelerations, keyed by track_id. On a
-    # track's first Phase-2 call, no prior exists, so acceleration defaults
-    # to 0.0 exactly (prev = forward_speed_ms itself -> delta = 0). At
-    # 30Hz tracking, each track's smoother already has several raw
-    # observations BEFORE its first exported frame -- the first two are
-    # enough to compute a real initial forward speed. Pre-loading that
-    # into h.prev_speeds / h.prev_positions_m here means the FIRST
-    # exported frame of every track gets a real, non-zero acceleration
-    # instead of an artefact zero.
+    # estimate_relative_velocity() differences a track's stored previous
+    # metric position, kept in h.prev_positions_m. On a track's first Phase-2
+    # call no prior exists, so its first exported velocity would be an
+    # artefact zero. At 30 Hz tracking each track's smoother already holds
+    # several raw observations BEFORE its first exported frame, so the first
+    # smoothed position is pre-loaded here and the first exported frame of
+    # every track gets a real velocity instead.
     for tid, ts_dict in smoothed.items():
         ts_sorted = sorted(ts_dict.keys())
         if len(ts_sorted) < 2:
             continue
-        t0, t1 = ts_sorted[0], ts_sorted[1]
+        t0 = ts_sorted[0]
         x0, y0 = ts_dict[t0]
-        x1, y1 = ts_dict[t1]
-        dt_seed = max(t1 - t0, 1e-6)
-        fwd_speed_seed = round((y1 - y0) / dt_seed, 2)
         # seed positions so estimate_relative_velocity knows the prior
         h.prev_positions_m[tid] = (x0, y0)
-        # seed speed so estimate_acceleration has a real prior on 1st export call
-        h.prev_speeds[tid] = fwd_speed_seed
 
     # =================================================================
     # PHASE 2 — metrics from smoothed positions, annotate, export
     # =================================================================
     # ACCEL_WINDOW_S: acceleration and jerk are computed over this fixed real-
-    # time window rather than the per-export-frame dt (~0.1s at 10Hz export).
-    # nuScenes validation showed noise compounds with Hz -- at 10Hz, a 1m
-    # position error produces 10 m/s speed error, which divided by dt=0.1
-    # produces 100 m/s² acceleration. Using a 1-second window matches highD's
-    # approach and keeps the denominator large enough to be meaningful.
+    # time window rather than the per-export-frame dt (0.2 s at 5 Hz export).
+    # Dividing an ordinary few-centimetre position fluctuation by a small
+    # denominator amplifies it sharply -- the per-frame version produced
+    # values up to 653 m/s². A 1-second window matches highD's approach,
+    # is independent of the export rate, and keeps the denominator large
+    # enough for the result to stay physically meaningful.
     ACCEL_WINDOW_S = 1.0
 
     all_frames_data = []
@@ -273,13 +253,10 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
             )
 
             # --- acceleration over 1-second window (not per-export-frame dt) ---
-            # Uses a fixed 1-second lookback window (highD-style) rather than
-            # the per-export-frame dt (~0.1s). At 10Hz, dividing by dt=0.1
-            # amplifies any speed noise by 10x into acceleration noise.
-            # When the window isn't full yet (track younger than 1 real second),
-            # acceleration and jerk are set to None -- honest about not having
-            # enough data, rather than computing a meaningless number from a
-            # zero prior which produced ±300 m/s² artifacts.
+            # Uses a fixed 1-second lookback (highD-style) rather than the
+            # per-export-frame dt. When the window isn't full yet (track
+            # younger than 1 real second), acceleration and jerk are exported
+            # as null rather than computed from a fabricated prior.
             history = speed_history.setdefault(tid, [])
             history.append((timestamp, forward_speed))
             speed_history[tid] = [(t, s) for t, s in history if t >= timestamp - 2.0]
@@ -290,14 +267,11 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
                 acceleration = round((forward_speed - spd_past) / accel_dt, 3)
 
                 # --- jerk over the SAME 1-second window ---
-                # A1 fix: jerk = Δaccel / Δt where Δt is the real elapsed time
-                # between the two acceleration values, NOT ACCEL_WINDOW_S.
-                # The previous code passed ACCEL_WINDOW_S=1.0 as dt to
-                # estimate_jerk, but prev_accelerations stored the accel from
-                # the previous export frame (0.1s ago) -- dividing a 0.1s
-                # change by 1.0s made every jerk value 10x too small,
-                # silently killing the brake-onset rule (jerk <= -3.0 became
-                # unreachable; you'd need real jerk of -30 m/s3 to trigger it).
+                # jerk = delta(accel) / delta(t), where delta(t) is the REAL
+                # elapsed time between the two acceleration values, not
+                # ACCEL_WINDOW_S. An earlier version divided a one-export-frame
+                # change by a full second, making every jerk value far too
+                # small and putting the brake-onset rule out of reach.
                 accel_history = accel_hist.setdefault(tid, [])
                 accel_history.append((timestamp, acceleration))
                 accel_hist[tid] = [(t, a) for t, a in accel_history if t >= timestamp - 2.0]
