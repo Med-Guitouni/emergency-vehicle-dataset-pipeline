@@ -3,11 +3,11 @@ import numpy as np
 
 class RTSSmoother:
     """
-     Runs AFTER tracking is complete,
-    BEFORE metrics are computed.
+    Rauch-Tung-Striebel smoother. Runs AFTER tracking is complete, BEFORE
+    metrics are computed.
 
     WHY
-    -----------------
+    ---
     Our raw positions come from projecting the bounding-box bottom pixel to
     the road. Two noise sources corrupt them:
       1. Detection jitter - the bbox edge wobbles a few pixels per frame,
@@ -21,15 +21,15 @@ class RTSSmoother:
     frames). RTS adds a second, backward pass over the finished trajectory:
     every position estimate is corrected using what happened AFTER it. The
     result is the statistically optimal smooth trajectory given all frames.
-    This is the same method highD (Krajewski et al. 2018) and INTERACTION
-    (Zhan et al. 2019)(critian paper) use before publishing their trajectories.
+    This is the same post-processing step highD (Krajewski et al. 2018) and
+    INTERACTION (Zhan et al. 2019) apply before publishing their trajectories.
 
-
-    -----------------
+    MEASUREMENT WEIGHTING
+    ---------------------
     Measurements flagged position_reliable=False (clipped bounding boxes) get
     a much larger measurement noise R, so the smoother trusts the motion model
-    more than the bad measurement there. This is what tames the +-3m oscillation
-    of trucks driving right beside the ambulance.
+    more than the bad measurement there. This is what tames the +-3 m
+    oscillation of trucks driving right beside the ambulance.
 
     MODEL
     -----
