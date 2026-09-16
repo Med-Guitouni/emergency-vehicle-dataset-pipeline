@@ -22,8 +22,10 @@ class LaneConfig:
     Once emergency_start_second is reached, is_emergency_active() returns True
     for the rest of the video. An ambulance does not turn its siren off mid-run.
 
-    PRIORITY: manual config wins over scene classifier for road_type.
-    If both exist and disagree, config is used and a warning is printed.
+    PRIORITY: the manual config is the only source of road_type. A scene
+    classifier was tried as an automatic fallback and dropped: it sometimes
+    reads motorway as urban, and the fallback below is fixed to highway /
+    3 lanes regardless, so its output was never consumed.
 
     CONFIG FORMAT (video_lanes.json)
     --------------------------------
@@ -60,9 +62,10 @@ class LaneConfig:
 
     FALLBACK
     --------
-    If a video is not in the config:
-        - lane info falls back to scene classifier output
-        - emergency is never active (add the video to the config to fix this)
+    If a video is not in the config, lane info falls back to highway /
+    3 lanes and lane_source is exported as "default_highway_3lane", so any
+    row produced without a manual annotation is identifiable in the output.
+    Emergency defaults to active (see is_emergency_active).
     """
 
     LANE_WIDTHS = {
@@ -96,7 +99,7 @@ class LaneConfig:
             lanes             - number of lanes (int)
             lane_width_meters - derived from road_type (float)
             road_type         - "highway", "urban", etc (str)
-            source            - "config" or "scene_classifier" (str)
+            source            - "config" or "default_highway_3lane" (str)
         """
         entry = self.config.get(video_name)
 
@@ -106,13 +109,6 @@ class LaneConfig:
                 if window["from_second"] <= timestamp < window["to_second"]:
                     road_type = window.get("road_type", self.DEFAULT_ROAD_TYPE)
 
-                    if (scene_type is not None
-                            and scene_type != "unknown"
-                            and scene_type != road_type):
-                        print(f"  NOTE t={timestamp}s: config says '{road_type}' "
-                              f"but scene classifier says '{scene_type}' "
-                              f"-> using config (ground truth)")
-
                     return {
                         "lanes":             window["lanes"],
                         "lane_width_meters": self.LANE_WIDTHS.get(road_type, self.LANE_WIDTHS["unknown"]),
@@ -120,12 +116,9 @@ class LaneConfig:
                         "source":            "config"
                     }
 
-        # fallback: ALWAYS highway / 3-lane by project decision.
-        # The scene classifier is deliberately ignored here -- only highway
-        # footage is being processed, and the scene classifier is not allowed
-        # to override this default (it sometimes misreads highway as urban).
-        # scene_type is accepted as a parameter for signature compatibility
-        # but is intentionally unused.
+        # fallback: ALWAYS highway / 3-lane by project decision -- the
+        # released corpus is motorway footage throughout. scene_type is
+        # accepted for signature compatibility but intentionally unused.
         return {
             "lanes":             self.DEFAULT_LANES,
             "lane_width_meters": self.LANE_WIDTHS[self.DEFAULT_ROAD_TYPE],
@@ -138,7 +131,7 @@ class LaneConfig:
         Returns (emergency_active, triggered_by) for a given timestamp.
 
         emergency_active: True if timestamp >= emergency_start_second
-        triggered_by:     ["manual"] — distinguishes from old FFT ["siren"] label
+        triggered_by:     ["manual"] — the annotation source
 
         DEFAULT (video not in config, or entry has no emergency_start_second):
         emergency_active=True, always. This matches every existing
