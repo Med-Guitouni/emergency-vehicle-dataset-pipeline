@@ -24,7 +24,7 @@ preprocessor → detector + tracker → homography → smoother → homography +
 ## ⚙️ Install
 
 ```bash
-pip3 install -U yt-dlp ultralytics opencv-python numpy torch torchvision
+pip3 install -U yt-dlp ultralytics opencv-python numpy torch torchvision pillow
 brew install ffmpeg          # or: apt install ffmpeg
 ```
 
@@ -65,9 +65,10 @@ what kind of road, and when the emergency run starts. This is the only manual
 input besides the labels, and it takes a couple of minutes per video. Format
 and rules are under [Lane config](#-lane-config-video_lanesjson).
 
-Skipping it does not crash anything. You fall back to highway with three lanes,
-and every exported row is stamped `lane_source: "default_highway_3lane"` so you
-can tell afterwards which rows were guessed.
+Skipping it does not crash anything. The scene classifier fills in road type
+automatically and lane count falls back to three, with every such row stamped
+`lane_source: "scene_classifier"` or `"default_highway_3lane"` so you can tell
+afterwards which rows were guessed.
 
 ### 3. Process
 
@@ -204,11 +205,21 @@ Emergency is latched. Once `emergency_start_second` is reached it stays active
 for the rest of the clip. A video with no entry defaults to active, since this
 footage is curated to be during a run.
 
-There is no automatic fallback for road type. Lane-line detection was tried
-with UFLD v2 and YOLOP and abandoned, because in exactly the dense scenes this
-dataset targets, large vehicles hide the markings. A scene-classifier CNN was
-evaluated as a fallback and dropped too: the corpus is motorway footage
-throughout, so the fallback is a fixed constant instead.
+If a segment has no manual entry, `scene_classifier.py` fills in the road type
+automatically. It is a ResNet18 pretrained on MIT Places365, run once per real
+second on the uncropped frame, which votes over its top-5 Places365 categories
+and requires three identical predictions in a row before it accepts a change,
+so a single misclassified frame cannot flip the label. Those rows are stamped
+`lane_source: "scene_classifier"`, and if the classifier has no confirmed
+prediction yet they fall back to `"default_highway_3lane"`.
+
+The classifier is a fallback, not the primary source: a manual entry always
+wins, and a disagreement between the two is printed but does not override the
+config. Lane count has no automatic source at all, since the classifier
+predicts a scene category, not how many lanes there are.
+
+Lane-line detection was tried with UFLD v2 and YOLOP and abandoned: in exactly
+the dense scenes this dataset targets, large vehicles hide the markings.
 
 ---
 
@@ -246,7 +257,7 @@ Each entry in `vehicles`:
 | `road_position_norm` | −1 to +1 across the whole road: ±1 the road edge or shoulder |
 | `distance_to_ego` | √(x² + y²) |
 | `lanes_total`, `road_type` | Road layout at this timestamp |
-| `lane_source` | `"config"` from `video_lanes.json`, `"default_highway_3lane"` if none |
+| `lane_source` | `"config"` manual, `"scene_classifier"` CNN fallback, `"default_highway_3lane"` neither |
 | `preceding_id`, `following_id` | Nearest vehicle ahead and behind in the same lane |
 | `left_*`, `right_*` | Same, in the adjacent lanes, highD convention |
 | `behaviour` | The label, or `ego` |
@@ -338,7 +349,8 @@ used and the residual is documented, not removed.
 | `homography.py` | Pixels → metres, plus velocity, distance, TTC, lanes, offsets |
 | `smoother.py` | RTS smoother, once per video between the phases |
 | `annotator.py` | Provisional kinematic labels |
-| `lane_config.py` | Reads `video_lanes.json` |
+| `lane_config.py` | Reads `video_lanes.json`, resolves lane width and emergency state |
+| `scene_classifier.py` | Places365 ResNet18 road-type fallback for unannotated segments |
 | `surrounding.py` | Six neighbour IDs, highD convention |
 | `exporter.py` | Writes the JSON |
 | `review.py` | Manual labelling window |
@@ -376,15 +388,14 @@ Then you review. `main.py` does not open a review window.
 
 ## ⚠️ Known limitations
 
-Speeds are relative, not absolute
+Speeds are relative, not absolute.  A
+road-segmentation-gated estimator is the open direction.
 
-The road is assumed flat. 
+The road is assumed flat. The measured horizon ratio is not constant across a
+video, and the compromise value leaves a residual error that is documented
+rather than removed.
 
-Validation isolates the projection. Feeding nuScenes 3D boxes and real
-per-frame calibration into this pipeline's projection code confirms the
-geometry and the smoother specifically. Smoothing cuts forward-speed error from
-3.74 to 2.14 m/s and lateral-speed error from 0.76 to 0.53 m/s on the
-straight-line subset. What it does not measure is detection and tracking error
+Validation isolates the projection.What it does not measure is detection and tracking error
 from the YOLOv8x and BoT-SORT stage, which stays a separate, unquantified
 source of error.
 
