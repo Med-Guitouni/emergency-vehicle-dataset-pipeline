@@ -107,3 +107,4 @@ class VideoPreprocessor:
         cropped = frame[int(h * 0.20):int(h * 0.85), 0:w]
         # fixed output size so BoT-SORT GMC never sees mismatched pyramid levels
         return cv2.resize(cropped, (1280, 720))
+
