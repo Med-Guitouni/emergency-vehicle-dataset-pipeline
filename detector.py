@@ -21,3 +21,8 @@ class VehicleDetector:
 
 
 
+
+
+
+
+
