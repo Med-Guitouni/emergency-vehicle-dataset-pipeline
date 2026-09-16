@@ -3,10 +3,6 @@
 review.py -- correction UI for exported JSON, reading frames directly from
 the source video (no review_data/ dependency, which main.py no longer writes).
 
-Replaces the old review.py (which needed pre-saved review_data/frame_*.jpg,
-no longer produced) and folds in visualize_pipeline.py's box-drawing concept
--- one tool instead of two, since the workflow is watch-and-correct, not
-batch-render.
 
 FRAME SOURCING: opens videos/<video_name>.<ext> directly, seeks by FRAME
 NUMBER (round(timestamp * native_fps)) rather than by millisecond position --
@@ -22,12 +18,7 @@ EGO VEHICLE: id=0 (bbox=None, fixed at the origin) is excluded from display,
 hit-testing, and correction entirely -- it's structural, not a real
 detection, and is written back to the JSON unchanged on save.
 
-JSON DISCOVERY: globs t*.json in the output folder and reads the
-"timestamp" field from EACH file's content, rather than reconstructing a
-filename from a timestamp -- current exporter.py uses frame-index filenames
-(t000000.json), decoupled from timestamp, so guessing filenames from
-timestamps breaks silently. This was the exact bug in the old
-visualize_pipeline.py.
+
 
 COLOURS:
   Green       yielded
