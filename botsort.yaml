@@ -1,3 +1,6 @@
+# BoT-SORT configuration (Aharon et al., arXiv 2206.14651), as used for the
+# released corpus. Ultralytics ships the tracker and its ReID weights.
+#
 # track_buffer IS SECRETLY HZ-COUPLED -- READ BEFORE CHANGING TRACK_FPS
 # ------------------------------------------------------------------------
 # Verified against ultralytics/trackers/track.py (on_predict_start): when
@@ -8,42 +11,36 @@
 #     tracker = TRACKER_MAP[cfg.tracker_type](args=cfg, frame_rate=30)
 # Internally: max_time_lost = int(frame_rate/30.0 * track_buffer). Since
 # frame_rate is always 30, this collapses to max_time_lost = track_buffer
-# exactly (90) -- always, regardless of TRACK_FPS. That "90" is a raw CALL
-# COUNT, not a duration; real-world occlusion memory = 90 / TRACK_FPS
-# seconds. At TRACK_FPS=30 (main.py's current setting) that's exactly 3
-# real seconds -- and 90 = 3 * 30 strongly suggests this value was
-# originally intended for 30Hz calling in the first place, since 90/30=3.
-# At the pipeline's earlier 5Hz setting this was UNINTENTIONALLY 18 real
-# seconds (90/5) -- six times more occlusion memory than whatever was
-# actually intended, discovered during Hz-comparison testing.
-# If TRACK_FPS ever changes again: track_buffer must be re-set to
-# (desired_real_seconds * 30) to keep the SAME real-world memory duration --
-# it will NOT scale itself, because Ultralytics never sees TRACK_FPS at all.
+# exactly -- always, regardless of TRACK_FPS. That number is a raw CALL
+# COUNT, not a duration; real-world occlusion memory = track_buffer /
+# TRACK_FPS seconds. At TRACK_FPS=30 (main.py's setting) 90 is exactly 3
+# real seconds. If TRACK_FPS ever changes, track_buffer must be re-set to
+# (desired_real_seconds * 30) to keep the same real-world memory -- it will
+# NOT scale itself, because Ultralytics never sees TRACK_FPS at all.
 tracker_type: botsort
 track_high_thresh: 0.25
 track_low_thresh: 0.10
 new_track_thresh: 0.25
-# STEP 1 CONFIRMED: config loading verified via live tracker-object readback
-# (tracker.py's _print_tracker_config). track_buffer=5 test showed 51 tracks
-# vs 50 at track_buffer=90 -- an 18x reduction in occlusion memory produced
-# almost no change, confirming track_buffer is NOT the fragmentation driver.
-# Restored to 90 = 3 real seconds of occlusion memory at TRACK_FPS=30.
+
+# Occlusion memory = 3 real seconds at TRACK_FPS=30.
+# Fragmentation experiment (paper Sec. X): dropping this to 5 -- an 18x
+# reduction -- moved the track count from 50 to 51, i.e. track_buffer is not
+# the fragmentation driver. Kept at the value used for the released corpus.
 track_buffer: 90
-match_thresh: 0.50   # lowered from 0.75 — diagnose_two.py confirmed short tracks
-                     # have near-identical box size/distance to long tracks,
-                     # ruling out detection loss and pointing to re-association
-                     # failure. 0.75 required 75% IoU overlap between a predicted
-                     # and detected box for a match — anything below got a new ID.
-                     # At 30Hz tracking, consecutive-frame boxes overlap ~0.90
-                     # (measured via raw_iou_mean), so 0.75 shouldn't be the
-                     # bottleneck in normal conditions — but during brief
-                     # partial occlusions, camera shake, or box-size fluctuations,
-                     # IoU can dip below 0.75 momentarily while the vehicle is
-                     # still clearly the same object. 0.50 gives more margin for
-                     # these transient dips without being so loose that genuinely
-                     # different vehicles get merged.
+
+# Fragmentation experiment (paper Sec. X): lowering this to 0.50 left
+# fragmentation unchanged, and measured consecutive-frame IoU is ~0.90, so
+# the threshold is never binding at 30 Hz. Kept at the value used for the
+# released corpus.
+match_thresh: 0.75
+
 fuse_score: True
-gmc_method: none
+
+# Camera-motion compensation via sparse optical flow. This is the reason
+# BoT-SORT replaced the ByteTrack+EMAP design: ego-motion is handled inside
+# the tracker, before association, instead of being bolted on afterwards.
+gmc_method: sparseOptFlow
+
 proximity_thresh: 0.5
 appearance_thresh: 0.25
 with_reid: True
