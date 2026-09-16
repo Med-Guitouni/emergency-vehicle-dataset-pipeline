@@ -22,10 +22,8 @@ class LaneConfig:
     Once emergency_start_second is reached, is_emergency_active() returns True
     for the rest of the video. An ambulance does not turn its siren off mid-run.
 
-    PRIORITY: the manual config is the only source of road_type. A scene
-    classifier was tried as an automatic fallback and dropped: it sometimes
-    reads motorway as urban, and the fallback below is fixed to highway /
-    3 lanes regardless, so its output was never consumed.
+    PRIORITY: manual config wins over the scene classifier for road_type.
+    If both exist and disagree, the config is used and a note is printed.
 
     CONFIG FORMAT (video_lanes.json)
     --------------------------------
@@ -62,9 +60,15 @@ class LaneConfig:
 
     FALLBACK
     --------
-    If a video is not in the config, lane info falls back to highway /
-    3 lanes and lane_source is exported as "default_highway_3lane", so any
-    row produced without a manual annotation is identifiable in the output.
+    If a video or a time window is not in the config, road_type falls back to
+    the scene classifier's prediction and lane_source is exported as
+    "scene_classifier", so any row that was not manually annotated is
+    identifiable in the output. Lane COUNT has no automatic source -- the
+    classifier predicts road-scene category, not how many lanes there are --
+    so it falls back to DEFAULT_LANES. With no classifier prediction available
+    either, road_type falls back to DEFAULT_ROAD_TYPE and lane_source reads
+    "default_highway_3lane".
+
     Emergency defaults to active (see is_emergency_active).
     """
 
@@ -99,7 +103,8 @@ class LaneConfig:
             lanes             - number of lanes (int)
             lane_width_meters - derived from road_type (float)
             road_type         - "highway", "urban", etc (str)
-            source            - "config" or "default_highway_3lane" (str)
+            source            - "config", "scene_classifier" or
+                                "default_highway_3lane" (str)
         """
         entry = self.config.get(video_name)
 
@@ -109,6 +114,13 @@ class LaneConfig:
                 if window["from_second"] <= timestamp < window["to_second"]:
                     road_type = window.get("road_type", self.DEFAULT_ROAD_TYPE)
 
+                    if (scene_type is not None
+                            and scene_type != "unknown"
+                            and scene_type != road_type):
+                        print(f"  NOTE t={timestamp}s: config says '{road_type}' "
+                              f"but scene classifier says '{scene_type}' "
+                              f"-> using config (ground truth)")
+
                     return {
                         "lanes":             window["lanes"],
                         "lane_width_meters": self.LANE_WIDTHS.get(road_type, self.LANE_WIDTHS["unknown"]),
@@ -116,9 +128,20 @@ class LaneConfig:
                         "source":            "config"
                     }
 
-        # fallback: ALWAYS highway / 3-lane by project decision -- the
-        # released corpus is motorway footage throughout. scene_type is
-        # accepted for signature compatibility but intentionally unused.
+        # Fallback: no manual annotation covers this timestamp. Take road_type
+        # from the scene classifier when it has a confirmed prediction, and the
+        # lane width that follows from it. Lane count has no automatic source,
+        # so it falls back to DEFAULT_LANES either way. The source field records
+        # which of the two paths produced the row, so unannotated segments stay
+        # identifiable in the exported data.
+        if scene_type and scene_type != "unknown":
+            return {
+                "lanes":             self.DEFAULT_LANES,
+                "lane_width_meters": self.LANE_WIDTHS.get(scene_type, self.LANE_WIDTHS["unknown"]),
+                "road_type":         scene_type,
+                "source":            "scene_classifier"
+            }
+
         return {
             "lanes":             self.DEFAULT_LANES,
             "lane_width_meters": self.LANE_WIDTHS[self.DEFAULT_ROAD_TYPE],
