@@ -376,17 +376,9 @@ Then you review. `main.py` does not open a review window.
 
 ## ⚠️ Known limitations
 
-Speeds are relative, not absolute. Recovering the ambulance's own speed needs
-GPS, an odometer or an IMU, none of which the footage has. Three vision-only
-estimators were tried against nuScenes ground truth and all three failed, with
-biases in opposite directions: in dense traffic the visible road surface is
-mostly covered by vehicles moving at roughly the ambulance's speed, so the flow
-signal every estimator depends on is masked or corrupted. A
-road-segmentation-gated estimator is the open direction.
+Speeds are relative, not absolute
 
-The road is assumed flat. The measured horizon ratio is not constant across a
-video, and the compromise value leaves a residual error that is documented
-rather than removed.
+The road is assumed flat. 
 
 Validation isolates the projection. Feeding nuScenes 3D boxes and real
 per-frame calibration into this pipeline's projection code confirms the
@@ -396,14 +388,7 @@ straight-line subset. What it does not measure is detection and tracking error
 from the YOLOv8x and BoT-SORT stage, which stays a separate, unquantified
 source of error.
 
-Tracks fragment. Exported tracks are shorter and more numerous than the real
-vehicle count. The cause is identified rather than open: roughly 70% of track
-terminations happen because no detection existed at that spot at all, not
-because association failed, and no tracker setting can link a detection that
-was never produced. The vehicles that get lost are small, distant and sitting
-essentially on the horizon line, the same physical limit that drives the
-distance error above. The fix is higher-resolution inference or a detector
-fine-tuned on small distant vehicles.
+Tracks fragment.
 
 ---
 
