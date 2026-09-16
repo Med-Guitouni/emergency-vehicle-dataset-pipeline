@@ -13,9 +13,9 @@ PHASE 1 (track at 30 Hz, export every 6th frame at 5 Hz)
   - Every raw frame: project bounding boxes to metres, feed track_obs so the
     RTS smoother sees the full 30 Hz trajectory.
   - Only on export frames (every 6th raw frame): store a record for export.
-  - Lane/emergency lookups are recomputed only when the whole real second
-    changes and reused across every frame within it -- independent of both
-    TRACK_FPS and EXPORT_FPS.
+  - Scene classification (CNN) and lane/emergency lookups are recomputed only
+    when the whole real second changes, and reused across every frame within
+    it -- independent of both TRACK_FPS and EXPORT_FPS.
 
 BETWEEN PHASES — RTS SMOOTHING
   Full 30 Hz trajectory per vehicle smoothed with the RTS smoother.
@@ -61,6 +61,7 @@ from annotator import HeuristicAnnotator
 from surrounding import SurroundingVehicles
 from lane_config import LaneConfig
 from smoother import RTSSmoother
+from scene_classifier import SceneClassifier
 
 TRACK_FPS  = 30
 EXPORT_FPS = 5
@@ -73,6 +74,40 @@ EXPORT_INTERVAL_FRAMES = TRACK_FPS // EXPORT_FPS   # export every Nth raw frame
 MIN_DT = 1.0 / EXPORT_FPS   # floor for dt in Phase 2 -- see docstring above
 
 lc = LaneConfig()
+
+# Scene classifier, loaded lazily: it downloads the Places365 weights on first
+# use, and a run whose videos are all annotated in video_lanes.json never needs
+# its prediction. Created once and reused across videos, with reset() clearing
+# its confirmation state between them.
+_sc = None
+
+
+class _NoSceneClassifier:
+    """
+    Stand-in used when the Places365 weights cannot be loaded (no network, for
+    instance). Returns "unknown", which lane_config.py treats as "no confirmed
+    prediction" and answers with DEFAULT_ROAD_TYPE and
+    lane_source="default_highway_3lane". A missing fallback must not abort a
+    run whose videos are annotated anyway.
+    """
+
+    def classify(self, frame):
+        return "unknown"
+
+    def reset(self):
+        pass
+
+
+def get_scene_classifier():
+    global _sc
+    if _sc is None:
+        try:
+            _sc = SceneClassifier()
+        except Exception as ex:
+            print(f"WARNING: scene classifier unavailable ({ex}). Unannotated "
+                  f"segments will fall back to the highway/3-lane default.")
+            _sc = _NoSceneClassifier()
+    return _sc
 
 
 def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None):
@@ -109,6 +144,8 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
     a  = HeuristicAnnotator()
     sv = SurroundingVehicles()
     sm = RTSSmoother()
+    sc = get_scene_classifier()
+    sc.reset()   # confirmation state must not carry over from the last video
 
     # =================================================================
     # PHASE 1 — track at 30 Hz, export every EXPORT_INTERVAL_FRAMES-th frame
@@ -134,15 +171,24 @@ def process_video(video_path, start_s=0.0, end_s=None, output_name_override=None
 
         tracked = t.update(d.model, frame, device=d.device)
 
-        # lane/emergency lookups: recompute only on crossing into a new
-        # whole second, reuse for every raw frame within it. scenario_type is
-        # fixed to "highway": the released corpus is motorway footage
-        # throughout, and lane_config.py's fallback returns highway/3-lane
-        # regardless of scene type, so a per-frame scene classifier produced
-        # a value nothing consumed.
+        # Lane/emergency lookups and scene classification: recomputed only on
+        # crossing into a new whole second, then reused for every raw frame
+        # within it. This cadence is independent of TRACK_FPS and EXPORT_FPS --
+        # re-running a CNN faster than the scene can plausibly change would be
+        # pure waste.
+        #
+        # The classifier runs on the UNCROPPED frame (frame_raw): it was trained
+        # on whole scenes, and the pipeline's crop removes the sky and horizon
+        # context it relies on. It votes over its top-5 Places365 predictions
+        # and requires three identical predictions in a row before accepting a
+        # change, so one misclassified frame cannot flip the label. It is not
+        # the primary source of road type -- manual annotation in
+        # video_lanes.json always wins -- it is the automatic fallback for
+        # segments that have not been annotated, so the pipeline can still
+        # assign a sensible lane width instead of an arbitrary guess.
         if whole_second != cached_second:
             cached_second               = whole_second
-            cached_scenario_type        = "highway"
+            cached_scenario_type        = sc.classify(frame_raw)
             cached_lane_info            = lc.get_lane_info(video_name, whole_second, cached_scenario_type)
             cached_emergency_active, _  = lc.is_emergency_active(video_name, whole_second)
 
